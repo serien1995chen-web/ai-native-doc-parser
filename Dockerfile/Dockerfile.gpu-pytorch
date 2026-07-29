@@ -1,0 +1,22 @@
+﻿# ============================================================
+# Dockerfile.gpu-pytorch — doclayout-YOLO + UniMERNet + TableTransformer
+# ============================================================
+
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-venv \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.gpu-pytorch.txt .
+RUN pip install --no-cache-dir -r requirements.gpu-pytorch.txt
+
+COPY gpu-pytorch/ .
+
+EXPOSE 8001
+
+CMD ["python3", "inference_server.py"]
