@@ -1,0 +1,209 @@
+﻿services:
+  # ============================================================
+  # 切片 4: Data Layer
+  # ============================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: docparser-postgres
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-docparser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-docparser}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docparser} -d ${POSTGRES_DB:-docparser}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: docparser-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: docparser-minio
+    restart: unless-stopped
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # 切片 5: System Tools
+  # ============================================================
+  tools:
+    image: docparser-tools:latest
+    container_name: docparser-tools
+    build:
+      context: .
+      dockerfile: Dockerfile.tools
+    restart: unless-stopped
+    volumes:
+      - tools_data:/tmp
+    expose:
+      - "8100"
+      - "8200"
+
+  # ============================================================
+  # 切片 1: API Server
+  # ============================================================
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: docparser-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      tools:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      MINIO_ENDPOINT: http://minio:9000
+      TOOLS_HOST: tools
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads_data:/data/uploads
+      - results_data:/data/results
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ============================================================
+  # 切片 2: Async Worker
+  # ============================================================
+  async-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: docparser-worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      tools:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      MINIO_ENDPOINT: http://minio:9000
+      TOOLS_HOST: tools
+    volumes:
+      - uploads_data:/data/uploads
+      - results_data:/data/results
+    command: arq app.worker.WorkerSettings
+
+  # ============================================================
+  # 切片 3: Frontend
+  # ============================================================
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: docparser-frontend
+    restart: unless-stopped
+    depends_on:
+      - api-server
+    ports:
+      - "80:80"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+
+  # ============================================================
+  # 切片 6: GPU Inference (PyTorch env)
+  # ============================================================
+  gpu-pytorch:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu-pytorch
+    container_name: docparser-gpu-pytorch
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - model_cache:/models
+    expose:
+      - "8001"
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      MODEL_BASE: /models
+
+  gpu-paddle:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu-paddle
+    container_name: docparser-gpu-paddle
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - model_cache:/models
+    expose:
+      - "8002"
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      MODEL_BASE: /models
+
+# ============================================================
+# Volumes
+# ============================================================
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  tools_data:
+  uploads_data:
+  results_data:
+  model_cache:
