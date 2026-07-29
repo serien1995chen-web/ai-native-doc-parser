@@ -1,0 +1,68 @@
+﻿[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-native-doc-parser"
+version = "0.1.0"
+description = "AI Native Document Parsing Platform"
+requires-python = ">=3.12"
+dependencies = [
+    # Web Framework
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-multipart>=0.0.9",
+    
+    # Database
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    
+    # Task Queue
+    "arq>=0.26",
+    "redis>=5.0",
+    
+    # Object Storage
+    "minio>=7.2",
+    
+    # HTTP & WebSocket
+    "httpx>=0.27",
+    "websockets>=12.0",
+    
+    # Template
+    "jinja2>=3.1",
+    
+    # File I/O
+    "aiofiles>=23.2",
+    "python-magic>=0.4.27",
+    
+    # Document Parsing
+    "PyMuPDF>=1.24",
+    "python-docx>=1.1",
+    "python-pptx>=0.6",
+    "openpyxl>=3.1",
+    "beautifulsoup4>=4.12",
+    "Pygments>=2.18",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
