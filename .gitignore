@@ -1,0 +1,53 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Environment ===
+.env
+*.env.local
+*.env.prod
+
+# === Docker ===
+.docker/
+*.log
+
+# === Project ===
+data/
+!data/.gitkeep
+uploads/
+!uploads/.gitkeep
+results/
+!results/.gitkeep
+logs/
+!logs/.gitkeep
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Testing ===
+.coverage
+htmlcov/
+.pytest_cache/
+
+# === Jupyter ===
+.ipynb_checkpoints/
