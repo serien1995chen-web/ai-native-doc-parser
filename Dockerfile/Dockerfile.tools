@@ -1,0 +1,19 @@
+﻿# ============================================================
+# Dockerfile.tools — LibreOffice + Pandoc
+# ============================================================
+
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-core \
+    libreoffice-impress \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-draw \
+    pandoc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+EXPOSE 8100 8200
+
+CMD ["tail", "-f", "/dev/null"]
