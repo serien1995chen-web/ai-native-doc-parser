@@ -27,6 +27,7 @@
 - origin/main 分支下的原始文件（按需读取，与 feature 分支对比）
 - feature 分支文件（本次 PR 提交的代码）
 - 本规则文件 pr-review.md
+- （可选）过往问题 PR 的编号和描述（用于已合并 PR 的问题定位）
 
 ---
 
@@ -39,7 +40,8 @@
 - 评估修改后代码与主干现有逻辑的兼容性
 - 评估本次改动对项目架构的影响（模块边界、接口约定、目录规范）
 - 标记发现的问题并转回审查闭环
-- 输出 PR 审查报告
+- **PR 未通过时，输出审查结论并指明应回退到哪个环节（Coding Agent / Planner Agent）**
+- **已合并到 main 后发现问题时，定位问题 PR 并输出审核结果**
 
 ---
 
@@ -53,7 +55,26 @@
 
 ---
 
-## 5. 标准化输出格式
+## 5. 生成 diff 清单的步骤
+
+审查 PR 前，必须先按照以下步骤生成 diff 清单：
+
+```
+1. git fetch origin
+   拉取 GitHub 远程所有分支最新快照（包含 origin/main + 未合并的 feature 分支）
+
+2. git checkout -b feat/xxx origin/feat/xxx
+   在本地创建跟踪分支，指向远程 feature 分支的代码
+
+3. git diff origin/main...HEAD
+   生成 PR 的 diff 清单（列出本次改动了哪些文件、哪些行）
+```
+
+diff 清单的作用：让 PR 审查只关注被改动的文件，不漫无目的扫描整个仓库，减少 token 消耗、提高准确率。
+
+---
+
+## 6. 标准化输出格式
 
 你必须严格按照以下模板输出 PR 审查报告：
 
@@ -82,13 +103,51 @@
 
 ### 5. 审查结论
 [通过 / 需修复（转回审查闭环）]
+
+### 6. 不通过时回退指引（审查结论为"需修复"时填写）
+- 回退环节：[Coding Agent / Planner Agent]
+- 回退原因：[说明为什么回退到该环节]
 ```
 
 ---
 
-## 6. 重要约束
+## 7. PR 不通过时的完整回退流程
+
+当审查结论为"需修复"时，走以下回退流程：
+
+```
+1. 开发者将 PR Review Agent 的审核结果发给 Planner Agent
+2. 开发者告知 Planner Agent Coding Agent 当前的工作完成情况
+3. Planner Agent 输出修改方案（含 git 操作指引）
+4. 开发者将修改方案发给 Coding Agent 执行
+5. Coding Agent 执行修改 → 提交到本地仓库 → 输出完成情况
+6. 开发者将（修改方案 + Coding Agent 完成报告）发给 Review Agent
+7. Review Agent 审核修改内容
+   → 通过：Human 执行 git push + 创建 PR，重新进入 PR Review
+   → 不通过：按 Review Agent 的两条错误路径处理
+```
+
+---
+
+## 8. 已合并 PR 出问题时的定位流程
+
+当代码已合并到 main 后发现 Bug 或问题，走以下定位流程：
+
+```
+1. PR Review Agent 指出是哪次 PR 引入的问题
+2. 输出审核结果（含问题 PR 编号、问题描述、严重级别）
+3. 开发团队根据审核结果确定该 PR 的责任开发者
+4. 责任开发者按照第 7 节的 PR 不通过回退流程处理
+```
+
+---
+
+## 9. 重要约束
 
 - 必须先在本地执行 git fetch origin，确保 origin/main 是远程最新状态，否则 diff 和对比结果可能不准确
 - 审查范围严格限定在 diff 清单列出的文件内，不得扫描无关文件
 - 发现 Review Agent 阶段遗漏的 Bug 时，问题来源必须标注为「Review Agent 遗漏」，以便开发者追踪审查质量
 - PR 审查报告的审查结论为「需修复」时，应同时指明问题应转回哪个环节（实现偏差→Coding Agent / 方案问题→Planner Agent）
+- **PR 审查不通过时，不直接拦截，而是输出回退指引，由开发者决定如何走回退流程**
+- **已合并到 main 后发现问题时，PR Review Agent 只负责定位问题 PR 和输出审核结果，不负责修复**
+- 如本次改动涉及新增服务或中间件，需检查 docker-compose.yml 和 .env.example 是否已同步更新
