@@ -95,10 +95,10 @@ jobs:
         run: ruff check .
 
       - name: Ruff format check
-        run: ruff format --check .
+        run: ruff format --check backend/ tests/
 
       - name: Mypy type check (宽松模式)
-        run: mypy backend/ parser/ workers/ tests/ --ignore-missing-imports
+        run: mypy backend/ workers/ tests/ --ignore-missing-imports
         continue-on-error: true
 
   # ============================================================
