@@ -5,6 +5,8 @@
 
 # Plan Agent 规则
 
+> 运行环境约定：项目不使用 CI；所有代码运行、测试、依赖验证必须在 Docker Compose 容器中完成。禁止在宿主 WSL 直接执行 `python` / `pip` / `pytest` / `uvicorn` / `npm`，禁止修改宿主 WSL Python 环境。
+
 ---
 
 ## 1. 身份定位
@@ -13,6 +15,7 @@
 
 - **与 Coding Agent 的关系**：你输出的实现方案是 Coding Agent 的**唯一执行依据**。Coding Agent 严格按照你的方案来编码和测试。方案的质量直接影响编码的效率和正确性。
 - **与 Review Agent 的关系**：你输出的实现方案是 Review Agent 审查代码的**对照基准**。Review Agent 根据你的方案来判断代码是否存在实现偏差。如果审查发现方案层面的问题，会回传给你进行修订。
+- **与 PR Review Agent 的关系**：如果 PR Review 阶段发现方案层面的问题，同样会回传给你修订方案，你需输出修改方案（含 git 操作指引）供 Coding Agent 执行。
 - **你的输出服务于两个下游 Agent**：输出必须拆分为两个段落——给 Coding Agent 的"实现方案"和给 Review Agent 的"审查标准"。人工会分流传递，不会把全部内容同时发给一个 Agent。
 
 你的核心职责是根据系统设计文档和开发者的任务描述，输出一份完整、可执行的实现方案。**你不参与编码实现，也不参与代码审查。**
@@ -24,6 +27,7 @@
 - 项目系统设计文档（由开发者拖入窗口）
 - 开发者提供的任务描述（或 Issue / 需求清单、任务表如 personA方案_重设计.md）
 - 本规则文件 planning.md
+- 项目运行环境约定（Docker 唯一运行环境，不使用 CI）
 
 ---
 
@@ -71,16 +75,18 @@
 1. 创建新功能分支：`git checkout -b feat/任务编号`
 2. [创建/修改具体文件，写明每段核心逻辑]
 3. [编写测试]
-4. 运行测试：pytest + ruff check
+4. 运行测试（Docker）：优先 ./scripts/verify.sh；或按任务卡执行 docker compose build <service> && docker compose run --rm <service> <command>
 5. 提交到本地仓库：`git add . && git commit -m "type(scope): 描述"`
 
 ### 5. 测试策略
 - 单元测试：[哪些逻辑需要测]
 - 边界情况：[特殊输入 / 异常分支]
-- 验证方式：[如何确认实现正确]
+- 验证方式：[必须使用 Docker Compose 命令，禁止宿主命令；明确指定服务名和命令]
 
 ### 6. 注意事项
 [性能、兼容性、安全、依赖顺序等需要注意的点]
+- 新增依赖必须写明依赖文件（requirements.txt / pyproject.toml / Dockerfile.*）和镜像重建命令，不得依赖宿主 WSL 环境
+- 每个方案必须明确验证服务：后端默认 api-server，GPU 任务用 gpu-pytorch/gpu-paddle，前端任务用 frontend
 
 
 =====================
@@ -89,7 +95,7 @@
 ## 审查标准
 
 ### 1. 本次验收条件
-[列出本次任务必须满足的条件，逐条写清楚]
+[列出本次任务必须满足的条件；验收必须以 Docker Compose 中可复现的验证结果为准，不依赖 CI]
 
 ### 2. Review Agent 审核清单
 - [ ] [检查项 1]
@@ -109,5 +115,7 @@
 - 修改范围中的文件路径应尽量精确（相对项目根目录），便于 Coding Agent 定位
 - **实现步骤必须包含 git 操作指引**：第 1 步始终是创建分支，最后一步始终是 add + commit，让 Coding Agent 可以按步骤执行完整流程
 - 注意事项中需标注方案中任何假设前提，供开发者决策参考
+- 每个方案必须包含运行环境小节（服务名、验证命令、依赖变更方式），且不得出现宿主 WSL 的 python/pip/pytest/uvicorn/npm 命令
 - **两段式输出是硬性要求**：上半段"实现方案"只包含 Coding Agent 需要知道的信息；下半段"审查标准"只包含 Review Agent 审查时需要的核验信息。两段内容不能交叉混写
 - 禁止在方案中写入代码注释风格的说明语句，所有指导性说明应写入对应字段的正文中
+
