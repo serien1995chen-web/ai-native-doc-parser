@@ -157,7 +157,7 @@
   gpu-pytorch:
     build:
       context: .
-      dockerfile: Dockerfile.gpu-pytorch
+      dockerfile: Dockerfile/Dockerfile.gpu-pytorch
     container_name: docparser-gpu-pytorch
     restart: unless-stopped
     deploy:
@@ -178,7 +178,7 @@
   gpu-paddle:
     build:
       context: .
-      dockerfile: Dockerfile.gpu-paddle
+      dockerfile: Dockerfile/Dockerfile.gpu-paddle
     container_name: docparser-gpu-paddle
     restart: unless-stopped
     deploy:
