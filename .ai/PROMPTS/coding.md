@@ -5,6 +5,8 @@
 
 # Coding Agent 规则
 
+> 运行环境约定：项目不使用 CI；代码运行、测试、依赖验证只在 Docker Compose 容器中进行。禁止在宿主 WSL 直接执行 `python` / `pip` / `pytest` / `uvicorn` / `npm`，禁止修改宿主 WSL Python 环境。
+
 ---
 
 ## 1. 身份定位
@@ -34,8 +36,9 @@
 - 执行 `git checkout -b feat/xxx` 从 main 创建新功能分支
 - 在本地项目工作区中编码实现方案中指定的功能
 - 根据系统设计文档编写测试并执行
-- 根据方案需求新增 Python 依赖时，可同步更新 pyproject.toml 和 requirements.txt
+- 根据方案需求新增 Python 依赖时，必须同步更新 pyproject.toml 和 requirements.txt（GPU/前端依赖按对应文件），然后重建 Docker 镜像
 - 执行 `git add .` 和 `git commit -m "类型(范围): 描述"` 将代码提交到本地仓库
+- 执行 Docker 验证：`docker compose build`、`docker compose run --rm <service> ...`、`./scripts/verify.sh`（如存在）
 - 收到 Review Agent 的结构化评审报告后，按要求修复代码
 - 输出工作完成情况报告
 
@@ -51,6 +54,9 @@
 - 不得在执行方案时擅自偏离方案内容（如有必要偏离，应在工作完成情况的方案执行说明中标注，由开发者决策）
 - 不得在未经方案明确指示的情况下修改 .gitignore、.env.example、docker-compose.yml 等顶层配置
 - 不得修改 pyproject.toml 中的项目核心元信息（项目名称、版本号、Python 版本等）
+- 禁止在宿主 WSL 直接执行 python、pip、pytest、uvicorn、npm、conda 等命令，禁止修改宿主 WSL Python 环境（包括 ~/.local）
+- 禁止使用 docker compose exec 作为测试验收依据
+- 禁止仅通过容器内 pip install 安装依赖而不更新依赖文件
 
 ---
 
@@ -78,7 +84,12 @@
 - 按方案执行：[是 / 否。如否，说明原因]
 - 与方案的偏差：[如有偏差，逐条说明原因和影响]
 
-### 5. 遗留事项 / 待确认点
+### 5. Docker 验证记录
+- 验证命令：[docker compose ...]
+- 结果：[通过/失败]
+- 依赖变更：[requirements.txt / pyproject.toml / Dockerfile.* 变更说明]
+
+### 6. 遗留事项 / 待确认点
 [已知问题、未覆盖的边界、需要开发者确认的事项]
 ```
 
@@ -103,9 +114,10 @@
    - 编码实现方案中指定的功能
    - 编写测试
 
-4. 【Coding Agent】验证
-   - pytest（测试全部通过）
-   - ruff check（无代码规范错误）
+4. 【Coding Agent】验证（Docker 唯一运行环境）
+   - ./scripts/verify.sh（优先）
+   - 或按任务卡执行：docker compose build <service> && docker compose run --rm <service> <command>
+   - GPU 任务使用 gpu-pytorch / gpu-paddle；前端任务使用 frontend
 
 5. 【Coding Agent】提交到本地仓库
    - git add .
@@ -115,8 +127,7 @@
 
 7. 【Human】接手后续步骤
    - git push origin feat/任务编号
-   - 在 GitHub 创建 PR
-   - 触发 CI
+   - 在 GitHub 创建 PR（项目不使用 CI）
    - 通知 Review Agent 审查
 ```
 
@@ -126,3 +137,5 @@
 - 每次 git commit 的提交信息应清晰描述改动内容，方便 Review Agent 和开发者理解
 - 修复阶段的代码修改完成后，需重新执行测试并更新工作完成情况
 - 如方案中有不明确之处，应在工作完成情况的「遗留事项」中标注，而非自行假设并偏离方案
+- 发现缺依赖时：记录缺失依赖 → 修改 requirements.txt / pyproject.toml / 对应 Dockerfile.* → docker compose build <服务> → 重新执行验证；不得修改宿主 WSL 环境
+- B 的解析器/GPU/前端依赖按 personB 规则 8 协作；修改公共 requirements.txt / pyproject.toml 前需在完成报告中说明
