@@ -9,52 +9,58 @@ description = "AI Native Document Parsing Platform"
 requires-python = ">=3.12"
 dependencies = [
     # Web Framework
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "pydantic>=2.0",
-    "pydantic-settings>=2.0",
-    "python-multipart>=0.0.9",
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.1",
+    "python-multipart==0.0.20",
     
     # Database
-    "sqlalchemy[asyncio]>=2.0",
-    "asyncpg>=0.29",
-    "alembic>=1.13",
+    "sqlalchemy[asyncio]==2.0.36",
+    "asyncpg==0.30.0",
+    "alembic==1.14.0",
     
     # Task Queue
-    "arq>=0.26",
-    "redis>=5.0",
+    "arq==0.26.1",
+    "redis==5.2.1",
     
     # Object Storage
-    "minio>=7.2",
+    "minio==7.2.12",
     
     # HTTP & WebSocket
-    "httpx>=0.27",
-    "websockets>=12.0",
+    "httpx==0.28.1",
+    "websockets==14.1",
     
     # Template
-    "jinja2>=3.1",
+    "jinja2==3.1.5",
     
     # File I/O
-    "aiofiles>=23.2",
-    "python-magic>=0.4.27",
+    "aiofiles==24.1.0",
+    "python-magic==0.4.27",
     
     # Document Parsing
-    "PyMuPDF>=1.24",
-    "python-docx>=1.1",
-    "python-pptx>=0.6",
-    "openpyxl>=3.1",
-    "beautifulsoup4>=4.12",
-    "Pygments>=2.18",
-    "Pillow>=10.0",
+    "PyMuPDF==1.25.1",
+    "python-docx==1.1.2",
+    "python-pptx==1.0.2",
+    "openpyxl==3.1.5",
+    "beautifulsoup4==4.12.3",
+    "Pygments==2.19.1",
+    "Pillow==11.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-    "ruff>=0.5",
-    "mypy>=1.10",
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.0",
+    "ruff==0.8.4",
+    "mypy==1.13.0",
 ]
+
+[tool.setuptools.package-dir]
+"" = "backend"
+
+[tool.setuptools.packages.find]
+where = ["backend"]
 
 [tool.ruff]
 target-version = "py312"
