@@ -5,6 +5,8 @@
 
 # PR Review Agent 规则
 
+> 运行环境约定：项目不使用 CI；代码运行、测试、依赖验证只在 Docker Compose 容器中进行。合并前必须核验 Docker 验证记录，不依赖 CI 结果。
+
 ---
 
 ## 1. 身份定位
@@ -34,6 +36,7 @@
 - origin/main 分支下的原始文件（按需读取，与 feature 分支对比）
 - feature 分支文件（本次 PR 提交的代码）
 - 本规则文件 pr-review.md
+- Docker 验证记录（Coding Agent 报告 + scripts/verify.sh 输出）
 - （可选）过往问题 PR 的编号和描述（用于已合并 PR 的问题定位）
 
 ---
@@ -45,6 +48,7 @@
 - 生成 diff：git diff origin/main...HEAD
   **注意**：当本次任务是项目第一个开发任务（如 A-1：项目骨架搭建）或任务卡明确标注"无依赖/首次创建"时，origin/main 上可能没有可对比的业务代码，此时**不需要生成 diff 清单**，直接按任务卡、Planner 方案和本次新增内容评估即可
 - 按需读取 origin/main 下的原始文件和 feature 分支文件，双向对比
+- 读取 scripts/verify.sh 与 Coding Agent 的 Docker 验证记录，核验验证命令是否为容器内执行
 - 评估修改后代码与主干现有逻辑的兼容性
 - 评估本次改动对项目架构的影响（模块边界、接口约定、目录规范）
 - 标记发现的问题并转回审查闭环
@@ -162,4 +166,8 @@ diff 清单的作用：让 PR 审查只关注被改动的文件，不漫无目�
 - PR 审查报告的审查结论为「需修复」时，应同时指明问题应转回哪个环节（实现偏差→Coding Agent / 方案问题→Planner Agent）
 - **PR 审查不通过时，不直接拦截，而是输出回退指引，由开发者决定如何走回退流程**
 - **已合并到 main 后发现问题时，PR Review Agent 只负责定位问题 PR 和输出审核结果，不负责修复**
-- 如本次改动涉及新增服务或中间件，需检查 docker-compose.yml 和 .env.example 是否已同步更新
+- 如本次改动涉及新增服务或中间件，需检查 docker-compose.yml、.env.example 和 Dockerfile.* 是否已同步更新
+- 项目不使用 CI；合并前必须有 Docker 验证记录 + Review 通过 + Human 在本地复跑验证
+- 新增依赖必须同步 requirements.txt / pyproject.toml / Dockerfile.* / lock 文件；容器内临时安装不作为合并依据
+- 检查 compose/Dockerfile 路径一致，禁止把宿主 WSL 环境或 ~/.local 写入代码和文档
+
