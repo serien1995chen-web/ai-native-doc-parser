@@ -61,7 +61,7 @@
     container_name: docparser-tools
     build:
       context: .
-      dockerfile: Dockerfile.tools
+      dockerfile: Dockerfile/Dockerfile.tools
     restart: unless-stopped
     volumes:
       - tools_data:/tmp
@@ -75,7 +75,8 @@
   api-server:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: Dockerfile/Dockerfile.api
+      target: dev
     container_name: docparser-api
     restart: unless-stopped
     depends_on:
@@ -113,7 +114,7 @@
   async-worker:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: Dockerfile/Dockerfile.api
     container_name: docparser-worker
     restart: unless-stopped
     depends_on:
@@ -141,7 +142,7 @@
   frontend:
     build:
       context: .
-      dockerfile: Dockerfile.frontend
+      dockerfile: Dockerfile/Dockerfile.frontend
     container_name: docparser-frontend
     restart: unless-stopped
     depends_on:

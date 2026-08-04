@@ -28,11 +28,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+COPY . .
+
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e ".[dev]" 2>/dev/null || true
+RUN pip install --no-cache-dir -e ".[dev]"
 
 EXPOSE 8000
 
