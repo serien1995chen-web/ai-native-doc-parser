@@ -1,22 +1,88 @@
 ﻿# ============================================================
-# Dockerfile.gpu-pytorch — doclayout-YOLO + UniMERNet + TableTransformer
+# Dockerfile.gpu-pytorch
+# doclayout-YOLO + UniMERNet + TableTransformer
+#
+# CUDA 12.4 + PyTorch cu124
+# 普通Python依赖：清华PyPI
+# PyTorch CUDA wheel：官方PyTorch源
 # ============================================================
 
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 \
-    python3.12-venv \
-    python3-pip \
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
+
+
+# ============================================================
+# Ubuntu APT 清华源
+# ============================================================
+
+RUN sed -i \
+    's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; \
+     s|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' \
+    /etc/apt/sources.list
+
+
+# ============================================================
+# 安装 Python 3.10
+# unimernet/doclayout 推荐 Python 3.10
+# ============================================================
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.10 \
+        python3.10-venv \
+        python3-pip \
+        curl \
     && rm -rf /var/lib/apt/lists/*
+
+
+
+# ============================================================
+# pip 默认配置
+# 普通Python包走清华源
+# ============================================================
+
+RUN pip config set global.index-url \
+        https://pypi.tuna.tsinghua.edu.cn/simple \
+    && pip config set global.trusted-host \
+        pypi.tuna.tsinghua.edu.cn
+
+
 
 WORKDIR /app
 
+
 COPY requirements.gpu-pytorch.txt .
-RUN pip install --no-cache-dir -r requirements.gpu-pytorch.txt
+
+
+# ============================================================
+# 安装本地 PyTorch CUDA wheel
+# 避免构建时访问海外源
+# ============================================================
+
+COPY pytorch-wheel /tmp/pytorch-wheel
+
+RUN pip install \
+    --no-cache-dir \
+    /tmp/pytorch-wheel/*.whl
+
+
+# ============================================================
+# 2. 安装其他Python依赖
+# 清华PyPI
+# ============================================================
+
+RUN pip install \
+    --default-timeout=600 \
+    --retries 10 \
+    --no-cache-dir \
+    -r requirements.gpu-pytorch.txt
+
+
 
 COPY gpu-pytorch/ .
 
+
 EXPOSE 8001
+
 
 CMD ["python3", "inference_server.py"]
