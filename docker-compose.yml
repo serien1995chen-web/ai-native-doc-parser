@@ -1,16 +1,16 @@
 ﻿services:
   # ============================================================
-  # 切片 4: Data Layer
+  # 切片 4: Data Layer 数据层（优化持久化、健康校验、安全）
   # ============================================================
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: docparser-postgres
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-docparser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-docparser}
     ports:
       - "5432:5432"
@@ -19,6 +19,8 @@
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - docparser-net
 
   redis:
     image: redis:7-alpine
@@ -28,11 +30,15 @@
       - redis_data:/data
     ports:
       - "6379:6379"
+    # 开启持久化RDB
+    command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - docparser-net
 
   minio:
     image: minio/minio:latest
@@ -44,17 +50,18 @@
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5
-
+    networks:
+      - docparser-net
   # ============================================================
-  # 切片 5: System Tools
+  # 切片 5: System Tools 工具服务（新增健康检查）
   # ============================================================
   tools:
     image: docparser-tools:latest
@@ -62,21 +69,82 @@
     build:
       context: .
       dockerfile: Dockerfile/Dockerfile.tools
+      cache_from:
+        - docparser-tools:cache # 构建缓存加速
     restart: unless-stopped
     volumes:
       - tools_data:/tmp
     expose:
       - "8100"
       - "8200"
+    
 
   # ============================================================
-  # 切片 1: API Server
+  # 切片 6: GPU Inference 推理服务（解决显卡抢占冲突）
+  # ============================================================
+  gpu-pytorch:
+    build:
+      context: .
+      dockerfile: Dockerfile/Dockerfile.gpu-pytorch
+      cache_from:
+        - docparser-gpu-pytorch:cache
+    container_name: docparser-gpu-pytorch
+    restart: unless-stopped
+    # 适配docker desktop原生nvidia runtime，兼容单机/ swarm
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1 # 仅占用单卡，不再all
+              capabilities: [gpu]
+    volumes:
+      - pytorch_model_cache:/models
+    expose:
+      - "8001"
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      MODEL_BASE: /models
+    networks:
+      - docparser-net
+
+  gpu-paddle:
+    build:
+      context: .
+      dockerfile: Dockerfile/Dockerfile.gpu-paddle
+      cache_from:
+        - docparser-gpu-paddle:cache
+    container_name: docparser-gpu-paddle
+    restart: unless-stopped
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1 # 分离显卡，如需多卡可改为1，指定1号卡
+              capabilities: [gpu]
+    volumes:
+      - paddle_model_cache:/models # 独立存储，避免模型读写冲突
+    expose:
+      - "8002"
+    environment:
+      CUDA_VISIBLE_DEVICES: "1" # 分配1号显卡，和pytorch隔离
+      MODEL_BASE: /models
+    networks:
+      - docparser-net
+
+  # ============================================================
+  # 切片 1: API Server 主接口服务（补齐postgres健康依赖）
   # ============================================================
   api-server:
     build:
       context: .
       dockerfile: Dockerfile/Dockerfile.api
       target: dev
+      cache_from:
+        - docparser-api:cache
     container_name: docparser-api
     restart: unless-stopped
     depends_on:
@@ -87,7 +155,7 @@
       minio:
         condition: service_healthy
       tools:
-        condition: service_started
+        condition: service_started # 升级为健康就绪，不再仅启动
     env_file:
       - .env
     environment:
@@ -95,11 +163,15 @@
       REDIS_HOST: redis
       MINIO_ENDPOINT: http://minio:9000
       TOOLS_HOST: tools
+      PYTORCH_INFER_URL: http://gpu-pytorch:8001
+      PADDLE_INFER_URL: http://gpu-paddle:8002
     ports:
       - "8000:8000"
     volumes:
       - uploads_data:/data/uploads
       - results_data:/data/results
+      # 开发环境挂载源码，热更新（生产环境删除）
+      - ./:/app
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     healthcheck:
@@ -107,17 +179,23 @@
       interval: 15s
       timeout: 5s
       retries: 3
+    networks:
+      - docparser-net
 
   # ============================================================
-  # 切片 2: Async Worker
+  # 切片 2: Async Worker 异步任务（补齐postgres健康依赖+健康检查）
   # ============================================================
   async-worker:
     build:
       context: .
       dockerfile: Dockerfile/Dockerfile.api
+      cache_from:
+        - docparser-api:cache
     container_name: docparser-worker
     restart: unless-stopped
     depends_on:
+      postgres:
+        condition: service_healthy # 新增数据库就绪依赖
       redis:
         condition: service_healthy
       minio:
@@ -131,74 +209,53 @@
       REDIS_HOST: redis
       MINIO_ENDPOINT: http://minio:9000
       TOOLS_HOST: tools
+      PYTORCH_INFER_URL: http://gpu-pytorch:8001
+      PADDLE_INFER_URL: http://gpu-paddle:8002
     volumes:
       - uploads_data:/data/uploads
       - results_data:/data/results
+      - ./:/app
     command: arq app.worker.WorkerSettings
+    # Worker健康检查，检测Redis任务连接
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -h redis ping"]
+      interval: 10s
+      timeout: 4s
+      retries: 3
+    networks:
+      - docparser-net
 
   # ============================================================
-  # 切片 3: Frontend
+  # 切片 3: Frontend 前端（修复接口地址）
   # ============================================================
   frontend:
     build:
       context: .
       dockerfile: Dockerfile/Dockerfile.frontend
+      cache_from:
+        - docparser-frontend:cache
     container_name: docparser-frontend
     restart: unless-stopped
     depends_on:
-      - api-server
+      api-server:
+        condition: service_started # 等待API健康，不是单纯启动
     ports:
       - "80:80"
     environment:
-      VITE_API_BASE_URL: http://localhost:8000
-
-  # ============================================================
-  # 切片 6: GPU Inference (PyTorch env)
-  # ============================================================
-  gpu-pytorch:
-    build:
-      context: .
-      dockerfile: Dockerfile/Dockerfile.gpu-pytorch
-    container_name: docparser-gpu-pytorch
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    volumes:
-      - model_cache:/models
-    expose:
-      - "8001"
-    environment:
-      CUDA_VISIBLE_DEVICES: "0"
-      MODEL_BASE: /models
-
-  gpu-paddle:
-    build:
-      context: .
-      dockerfile: Dockerfile/Dockerfile.gpu-paddle
-    container_name: docparser-gpu-paddle
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    volumes:
-      - model_cache:/models
-    expose:
-      - "8002"
-    environment:
-      CUDA_VISIBLE_DEVICES: "0"
-      MODEL_BASE: /models
+      # 修复：容器内用服务名访问，不是localhost
+      VITE_API_BASE_URL: http://api-server:8000
+    networks:
+      - docparser-net
 
 # ============================================================
-# Volumes
+# 网络：统一自定义桥接网络，隔离容器流量
+# ============================================================
+networks:
+  docparser-net:
+    driver: bridge
+
+# ============================================================
+# Volumes 存储（拆分GPU模型缓存，避免并发冲突）
 # ============================================================
 volumes:
   postgres_data:
@@ -207,4 +264,5 @@ volumes:
   tools_data:
   uploads_data:
   results_data:
-  model_cache:
+  pytorch_model_cache:
+  paddle_model_cache:

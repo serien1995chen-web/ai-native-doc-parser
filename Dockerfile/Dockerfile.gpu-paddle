@@ -1,22 +1,41 @@
-﻿# ============================================================
-# Dockerfile.gpu-paddle — PaddleOCR
+# ============================================================
+# Dockerfile.gpu-paddle
+# PaddleOCR GPU Service
 # ============================================================
 
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 \
-    python3.12-venv \
+# 清华 Ubuntu 源
+RUN sed -i \
+    -e 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' \
+    -e 's|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' \
+    /etc/apt/sources.list
+
+
+RUN apt-get update && apt-get install -y \
+    python3.10 \
     python3-pip \
+    python3.10-venv \
     && rm -rf /var/lib/apt/lists/*
+
 
 WORKDIR /app
 
+
+COPY paddle-wheel /tmp/paddle-wheel
+
 COPY requirements.gpu-paddle.txt .
-RUN pip install --no-cache-dir -r requirements.gpu-paddle.txt
+
+
+RUN pip install \
+--no-cache-dir \
+--find-links=/tmp/paddle-wheel \
+-r requirements.gpu-paddle.txt
+
 
 COPY gpu-paddle/ .
 
+
 EXPOSE 8002
 
-CMD ["python3", "inference_server.py"]
+CMD ["uvicorn", "inference_server:app", "--host", "0.0.0.0", "--port", "8002"]
