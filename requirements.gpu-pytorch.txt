@@ -1,0 +1,13 @@
+# GPU PyTorch inference dependencies.
+# PyTorch installed separately in Dockerfile
+
+
+doclayout_yolo==0.0.4
+unimernet==0.2.3
+transformers==4.42.4
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+numpy>=1.26.0,<2.0.0
