@@ -1,8 +1,7 @@
-﻿# ============================================================
-# Dockerfile.tools — LibreOffice + Pandoc
-# ============================================================
-
-FROM ubuntu:22.04
+﻿FROM ubuntu:22.04
+# APT清华源
+RUN sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list \
+    && sed -i 's/security.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-core \
@@ -15,5 +14,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8100 8200
-
 CMD ["tail", "-f", "/dev/null"]
