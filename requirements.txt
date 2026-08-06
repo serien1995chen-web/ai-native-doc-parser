@@ -1,4 +1,4 @@
-﻿# Core Application
+# Core Application
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
@@ -36,3 +36,4 @@ openpyxl==3.1.5
 beautifulsoup4==4.12.3
 Pygments==2.19.1
 Pillow==11.0.0
+
