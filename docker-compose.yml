@@ -130,7 +130,7 @@
     expose:
       - "8002"
     environment:
-      CUDA_VISIBLE_DEVICES: "1" # 分配1号显卡，和pytorch隔离
+      CUDA_VISIBLE_DEVICES: "0" # 分配1号显卡，和pytorch隔离
       MODEL_BASE: /models
     networks:
       - docparser-net
