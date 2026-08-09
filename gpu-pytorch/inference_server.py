@@ -105,3 +105,13 @@ async def formula(file: UploadFile = File(...)) -> dict[str, Any]:
             "/models/unimernet; see gpu-pytorch/README.md"
         ),
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8001,
+    )
