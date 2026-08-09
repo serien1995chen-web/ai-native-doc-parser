@@ -10,6 +10,9 @@ build/
 .venv/
 venv/
 env/
+.uv/
+__pypackages__/
+pip-wheel-cache/
 
 # === IDE ===
 .vscode/
@@ -22,6 +25,9 @@ Thumbs.db
 
 # === Environment ===
 .env
+/.env.bak
+.env.backup
+.env.old
 *.env.local
 *.env.prod
 
@@ -38,6 +44,8 @@ results/
 !results/.gitkeep
 logs/
 !logs/.gitkeep
+/paddle-wheel/
+/pytorch-wheel/
 
 # === OS ===
 .DS_Store
