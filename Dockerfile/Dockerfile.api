@@ -42,7 +42,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY . .
+WORKDIR /app
+
+COPY backend ./backend
+COPY backend/app ./app
+COPY workers ./workers
+COPY pyproject.toml .
+COPY requirements.txt .
 
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
@@ -74,7 +80,13 @@ WORKDIR /app
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 
-COPY . .
+WORKDIR /app
+
+COPY backend ./backend
+COPY backend/app ./app
+COPY workers ./workers
+COPY pyproject.toml .
+COPY requirements.txt .
 
 USER appuser
 
