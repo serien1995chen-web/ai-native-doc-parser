@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.database import init_db
 from app.core.logging import setup_logging
 
 APP_TITLE = "AI Native Document Parsing Platform"
@@ -22,6 +23,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Manage application startup and shutdown lifecycle."""
     setup_logging()
+    try:
+        await init_db()
+        logger.info("Database initialized successfully")
+    except Exception:
+        logger.exception("Database initialization failed")
+        raise
     logger.info("Application startup complete")
     yield
     logger.info("Application shutdown complete")
