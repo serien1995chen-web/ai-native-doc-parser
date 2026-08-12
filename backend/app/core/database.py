@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import settings
-from app.models.base import Base
 
 async_engine = create_async_engine(
     settings.DATABASE_URL,
@@ -41,7 +40,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create all tables from model metadata for development startup."""
-    async with async_engine.begin() as connection:
-        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-        await connection.run_sync(Base.metadata.create_all)
+    """Verify the database connection is available."""
+    async with async_engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))

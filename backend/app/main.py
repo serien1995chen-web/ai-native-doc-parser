@@ -25,9 +25,9 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     setup_logging()
     try:
         await init_db()
-        logger.info("Database initialized successfully")
+        logger.info("Database connection verified")
     except Exception:
-        logger.exception("Database initialization failed")
+        logger.exception("Database connection verification failed")
         raise
     logger.info("Application startup complete")
     yield

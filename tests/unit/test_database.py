@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from sqlalchemy import create_mock_engine
+from sqlalchemy import Integer, String, create_engine, create_mock_engine
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 from app.core.database import get_db, init_db
 from app.models import Base
+from app.models.base import TimestampMixin
 
 pytestmark = pytest.mark.unit
 
@@ -182,26 +185,54 @@ async def test_get_db_rolls_back_on_exception() -> None:
 
 
 @pytest.mark.asyncio
-async def test_init_db_creates_all_tables() -> None:
+async def test_init_db_verifies_connection() -> None:
     engine = Mock()
     connection = AsyncMock()
-    connection.run_sync = AsyncMock()
-    engine.begin.return_value = AsyncMock()
-    engine.begin.return_value.__aenter__.return_value = connection
+    engine.connect.return_value = AsyncMock()
+    engine.connect.return_value.__aenter__.return_value = connection
     with patch("app.core.database.async_engine", engine):
         await init_db()
     connection.execute.assert_awaited_once()
-    connection.run_sync.assert_awaited_once()
+    assert str(connection.execute.await_args.args[0]) == "SELECT 1"
 
 
 @pytest.mark.asyncio
-async def test_init_db_is_idempotent() -> None:
+async def test_init_db_does_not_create_tables() -> None:
     engine = Mock()
     connection = AsyncMock()
-    connection.run_sync = AsyncMock()
-    engine.begin.return_value = AsyncMock()
-    engine.begin.return_value.__aenter__.return_value = connection
-    with patch("app.core.database.async_engine", engine):
+    engine.connect.return_value = AsyncMock()
+    engine.connect.return_value.__aenter__.return_value = connection
+    with patch("app.core.database.async_engine", engine), patch.object(
+        Base.metadata, "create_all"
+    ) as create_all:
         await init_db()
-        await init_db()
-    assert connection.run_sync.await_count == 2
+    connection.execute.assert_awaited_once()
+    create_all.assert_not_called()
+
+
+def test_timestamp_mixin_updated_at_refreshes_on_update() -> None:
+    class ReviewTestBase(DeclarativeBase):
+        pass
+
+    class ReviewTimestampModel(TimestampMixin, ReviewTestBase):
+        __tablename__ = "review_timestamp"
+        id: Mapped[int] = mapped_column(Integer, primary_key=True)
+        name: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    ReviewTestBase.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    past = datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        row = ReviewTimestampModel(name="before")
+        session.add(row)
+        session.commit()
+        row.updated_at = past
+        session.commit()
+        old_updated_at = row.updated_at
+        row.name = "after"
+        session.commit()
+        session.refresh(row)
+        assert row.updated_at is not None
+        assert row.updated_at != old_updated_at
