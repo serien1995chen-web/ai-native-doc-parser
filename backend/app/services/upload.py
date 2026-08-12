@@ -54,6 +54,19 @@ class UploadService:
     def __init__(self, storage: StorageService) -> None:
         self.storage = storage
 
+    async def _check_duplicate(self, db: Any, data: bytes) -> str:
+        """Compute SHA-256 and reject content already stored globally."""
+        file_hash = hashlib.sha256(data).hexdigest()
+        result = await db.execute(
+            select(File).where(File.file_hash == file_hash).limit(1)
+        )
+        if result.scalar_one_or_none() is not None:
+            raise AppException(
+                ErrorCode.FILE_DUPLICATE,
+                "A file with the same content already exists",
+            )
+        return file_hash
+
     async def upload_file(
         self,
         db: Any,
@@ -66,10 +79,7 @@ class UploadService:
         """Persist an uploaded file and its metadata."""
         if len(data) > settings.MAX_UPLOAD_SIZE:
             raise AppException(ErrorCode.FILE_TOO_LARGE, "File exceeds upload size limit")
-        file_hash = hashlib.sha256(data).hexdigest()
-        result = await db.execute(select(File).where(File.file_hash == file_hash).limit(1))
-        if result.scalar_one_or_none() is not None:
-            raise AppException(ErrorCode.FILE_DUPLICATE, "A file with the same content already exists")
+        file_hash = await self._check_duplicate(db, data)
 
         file_id = uuid.uuid4()
         safe_name = _safe_filename(original_name)
@@ -160,6 +170,7 @@ class UploadService:
         data = content.encode("utf-8")
         if len(data) > settings.MAX_UPLOAD_SIZE:
             raise AppException(ErrorCode.FILE_TOO_LARGE, "Text exceeds upload size limit")
+        file_hash = await self._check_duplicate(db, data)
 
         file_id = uuid.uuid4()
         safe_name = f"paste-{file_id}.txt"
@@ -186,6 +197,7 @@ class UploadService:
             type_hint=type_hint,
             stored_path=relative_path,
             file_size=len(data),
+            file_hash=file_hash,
             content_type=content_type,
             mime_type="text/plain",
             status=FileStatus.UPLOADED.value,

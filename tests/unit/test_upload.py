@@ -273,6 +273,7 @@ async def test_upload_file_commit_failure_rolls_back() -> None:
 @pytest.mark.asyncio
 async def test_upload_text_storage_failure_rolls_back_and_no_record() -> None:
     db = _make_db()
+    db.execute.return_value = FakeResult([])
     service = UploadService(FailingStorage())
 
     with pytest.raises(OSError):
@@ -292,7 +293,9 @@ async def test_upload_text_success() -> None:
 
     assert response.original_name.endswith(".txt")
     assert list(storage.data.values())[0] == b"print('hi')"
-    assert db.add.call_args.args[0].source_content == "print('hi')"
+    record = db.add.call_args.args[0]
+    assert record.source_content == "print('hi')"
+    assert record.file_hash == hashlib.sha256(b"print('hi')").hexdigest()
 
 
 @pytest.mark.asyncio
@@ -306,13 +309,39 @@ async def test_upload_text_rejects_invalid_type_hint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_text_duplicate_returns_file_duplicate() -> None:
+    db = _make_db()
+    data = b"same text"
+    existing = _make_file(file_hash=hashlib.sha256(data).hexdigest())
+    db.execute.return_value = FakeResult([existing])
+    service, _ = _service(db)
+
+    with pytest.raises(AppException) as exc:
+        await service.upload_text(db, uuid.uuid4(), "same text", "text")
+    assert exc.value.code == ErrorCode.FILE_DUPLICATE.value
+
+
+@pytest.mark.asyncio
+async def test_upload_file_and_text_share_global_hash_space() -> None:
+    db = _make_db()
+    data = b"shared content"
+    existing = _make_file(file_hash=hashlib.sha256(data).hexdigest())
+    db.execute.return_value = FakeResult([existing])
+    service, _ = _service(db)
+
+    with pytest.raises(AppException) as exc:
+        await service.upload_text(db, uuid.uuid4(), "shared content", "text")
+    assert exc.value.code == ErrorCode.FILE_DUPLICATE.value
+
+
+@pytest.mark.asyncio
 async def test_upload_text_sets_content_type() -> None:
     db = _make_db()
     db.execute.return_value = FakeResult([])
     service, _ = _service(db)
 
     await service.upload_text(db, uuid.uuid4(), "hello", "text")
-    await service.upload_text(db, uuid.uuid4(), "hello", "code")
+    await service.upload_text(db, uuid.uuid4(), "world", "code")
 
     added = db.add.call_args_list
     assert added[0].args[0].content_type == "text_block"

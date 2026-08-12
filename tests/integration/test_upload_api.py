@@ -239,6 +239,24 @@ async def test_upload_text_success(api_context: Any) -> None:
     assert response.json()["data"]["original_name"].endswith(".txt")
     assert db.files[0].source_content == "print('hi')"
     assert db.files[0].content_type == "code"
+    assert db.files[0].file_hash
+
+
+@pytest.mark.asyncio
+async def test_upload_text_duplicate_returns_409(api_context: Any) -> None:
+    app, _, _, _ = api_context
+    async with await _client(app) as client:
+        first = await client.post(
+            "/api/v1/files/upload/text",
+            json={"content": "same text", "type_hint": "text"},
+        )
+        second = await client.post(
+            "/api/v1/files/upload/text",
+            json={"content": "same text", "type_hint": "text"},
+        )
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "FILE_DUPLICATE"
 
 
 @pytest.mark.asyncio
