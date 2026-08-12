@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.exceptions import AppException
@@ -107,6 +108,16 @@ class UploadService:
         db.add(record)
         try:
             await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            try:
+                await self.storage.delete(relative_path)
+            except Exception:
+                pass
+            raise AppException(
+                ErrorCode.FILE_DUPLICATE,
+                "A file with the same content already exists",
+            ) from None
         except Exception:
             await db.rollback()
             raise
@@ -207,6 +218,16 @@ class UploadService:
         db.add(record)
         try:
             await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            try:
+                await self.storage.delete(relative_path)
+            except Exception:
+                pass
+            raise AppException(
+                ErrorCode.FILE_DUPLICATE,
+                "A file with the same content already exists",
+            ) from None
         except Exception:
             await db.rollback()
             raise

@@ -130,6 +130,12 @@ def test_required_indexes_exist() -> None:
         assert expected <= table_indexes[table_name], table_name
 
 
+def test_files_file_hash_unique_constraint_exists() -> None:
+    files = Base.metadata.tables["files"]
+    constraint_names = {constraint.name for constraint in files.constraints}
+    assert "uq_files_file_hash" in constraint_names
+
+
 def test_files_name_trgm_index_uses_gin_ops() -> None:
     files = Base.metadata.tables["files"]
     index = next(i for i in files.indexes if i.name == "ix_files_original_name_trgm")

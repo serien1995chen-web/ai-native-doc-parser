@@ -12,6 +12,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -35,6 +36,7 @@ class File(TimestampMixin, Base):
             postgresql_using="gin",
             postgresql_ops={"original_name": "gin_trgm_ops"},
         ),
+        UniqueConstraint("file_hash", name="uq_files_file_hash"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

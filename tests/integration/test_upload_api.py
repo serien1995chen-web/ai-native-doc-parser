@@ -15,6 +15,7 @@ from sqlalchemy.dialects import postgresql
 from app.api.deps import get_current_user_id, get_db
 from app.api.v1.files import get_storage_service
 from app.core.config import settings
+from app.core.security import create_access_token
 from app.main import create_app
 from app.models import File
 from app.services.storage import LocalStorageService
@@ -155,6 +156,26 @@ async def test_upload_without_auth_returns_401() -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_with_jwt_sub_api_key_returns_401() -> None:
+    app = create_app()
+    db = FakeAsyncSession()
+
+    async def override_get_db() -> Any:
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    token = create_access_token("api-key")
+    async with await _client(app) as client:
+        response = await client.post(
+            "/api/v1/files/upload",
+            files={"file": ("a.txt", b"hello", "text/plain")},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.asyncio
 async def test_upload_file_success(api_context: Any) -> None:
     app, db, storage, _ = api_context
     async with await _client(app) as client:
@@ -225,6 +246,22 @@ async def test_upload_screenshot_rejects_invalid_data(api_context: Any) -> None:
         )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "UNSUPPORTED_FORMAT"
+
+
+@pytest.mark.asyncio
+async def test_upload_screenshot_duplicate_returns_409(api_context: Any) -> None:
+    app, _, _, _ = api_context
+    png_data = b"\x89PNG\r\n\x1a\n" + b"same-image"
+    payload = {
+        "image_base64": "data:image/png;base64,"
+        + base64.b64encode(png_data).decode()
+    }
+    async with await _client(app) as client:
+        first = await client.post("/api/v1/files/upload/screenshot", json=payload)
+        second = await client.post("/api/v1/files/upload/screenshot", json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "FILE_DUPLICATE"
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import get_current_user_id
+from app.api.deps import AuthIdentity, AuthSource, get_current_user_id
 from app.core.config import settings
 from app.core.exceptions import AppException
 from app.models import File, User
@@ -257,17 +257,19 @@ async def test_upload_file_storage_failure_rolls_back_and_no_record() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_file_commit_failure_rolls_back() -> None:
+async def test_upload_file_commit_integrity_error_cleans_storage() -> None:
     db = _make_db()
     db.execute.return_value = FakeResult([])
-    db.commit.side_effect = RuntimeError("commit failed")
-    service, _ = _service(db)
+    db.commit.side_effect = IntegrityError("INSERT", {}, Exception("duplicate"))
+    service, storage = _service(db)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(AppException) as exc:
         await service.upload_file(db, uuid.uuid4(), "a.txt", "text/plain", b"hello")
 
+    assert exc.value.code == ErrorCode.FILE_DUPLICATE.value
     db.add.assert_called_once()
     db.rollback.assert_awaited_once()
+    assert len(storage.data) == 0
 
 
 @pytest.mark.asyncio
@@ -476,7 +478,10 @@ async def test_get_current_user_id_jwt_user_exists() -> None:
     user = _make_user()
     db.execute.return_value = FakeResult([user])
 
-    result = await get_current_user_id(db, identity=str(user.id))
+    result = await get_current_user_id(
+        db,
+        identity=AuthIdentity(AuthSource.JWT, str(user.id)),
+    )
 
     assert result == user.id
 
@@ -486,8 +491,24 @@ async def test_get_current_user_id_invalid_identity() -> None:
     db = _make_db()
 
     with pytest.raises(AppException) as exc:
-        await get_current_user_id(db, identity="not-a-uuid")
+        await get_current_user_id(
+            db,
+            identity=AuthIdentity(AuthSource.JWT, "not-a-uuid"),
+        )
     assert exc.value.code == ErrorCode.UNAUTHORIZED.value
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_id_rejects_jwt_sub_api_key() -> None:
+    db = _make_db()
+
+    with pytest.raises(AppException) as exc:
+        await get_current_user_id(
+            db,
+            identity=AuthIdentity(AuthSource.JWT, "api-key"),
+        )
+    assert exc.value.code == ErrorCode.UNAUTHORIZED.value
+    db.execute.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -495,7 +516,10 @@ async def test_get_current_user_id_api_key_creates_user() -> None:
     db = _make_db()
     db.execute.return_value = FakeResult([])
 
-    result = await get_current_user_id(db, identity="api-key")
+    result = await get_current_user_id(
+        db,
+        identity=AuthIdentity(AuthSource.API_KEY, "api-key"),
+    )
 
     assert isinstance(result, uuid.UUID)
     db.add.assert_called_once()
@@ -509,7 +533,10 @@ async def test_get_current_user_id_api_key_existing_user() -> None:
     user = _make_user(username="api-key")
     db.execute.return_value = FakeResult([user])
 
-    result = await get_current_user_id(db, identity="api-key")
+    result = await get_current_user_id(
+        db,
+        identity=AuthIdentity(AuthSource.API_KEY, "api-key"),
+    )
 
     assert result == user.id
     db.add.assert_not_called()
@@ -522,7 +549,10 @@ async def test_get_current_user_id_api_key_concurrent_insert_rolls_back_and_requ
     db.execute.side_effect = [FakeResult([]), FakeResult([existing])]
     db.commit.side_effect = IntegrityError("INSERT", {}, Exception("duplicate"))
 
-    result = await get_current_user_id(db, identity="api-key")
+    result = await get_current_user_id(
+        db,
+        identity=AuthIdentity(AuthSource.API_KEY, "api-key"),
+    )
 
     assert result == existing.id
     db.add.assert_called_once()
