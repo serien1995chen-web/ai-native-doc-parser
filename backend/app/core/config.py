@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     PANDOC_ENABLED: bool = True
     SECRET_KEY: str = "dev-secret-key-change-me"
     API_KEY: str = "dev-api-key-change-me"
+    JWT_EXPIRATION_SECONDS: int = 86400
     CORS_ORIGINS: str = "*"
 
 
