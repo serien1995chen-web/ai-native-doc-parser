@@ -111,8 +111,15 @@ def verify_token(token: str) -> dict[str, Any]:
         actual = _b64url_decode(signature_b64)
         if not hmac.compare_digest(actual, expected):
             raise ValueError("invalid signature")
+        if not isinstance(header, dict) or not isinstance(payload, dict):
+            raise ValueError("invalid token structure")
         if header.get("alg") != "HS256":
             raise ValueError("invalid algorithm")
+        if header.get("typ") != "JWT":
+            raise ValueError("invalid token type")
+        subject = payload.get("sub")
+        if not isinstance(subject, str) or not subject:
+            raise ValueError("invalid subject")
         if int(payload["exp"]) <= int(time.time()):
             raise ValueError("token expired")
         return payload

@@ -34,10 +34,11 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-def _raw_token(payload: dict) -> str:
-    header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+def _raw_token(payload: object, header: object | None = None) -> str:
+    jwt_header = header if header is not None else {"alg": "HS256", "typ": "JWT"}
+    encoded_header = _b64url(json.dumps(jwt_header).encode())
     body = _b64url(json.dumps(payload).encode())
-    signing_input = f"{header}.{body}".encode()
+    signing_input = f"{encoded_header}.{body}".encode()
     signature = _b64url(
         hmac.new(
             settings.SECRET_KEY.encode(),
@@ -45,7 +46,7 @@ def _raw_token(payload: dict) -> str:
             hashlib.sha256,
         ).digest()
     )
-    return f"{header}.{body}.{signature}"
+    return f"{encoded_header}.{body}.{signature}"
 
 
 def _build_test_app() -> TestClient:
@@ -127,6 +128,71 @@ def test_invalid_token_formats_raise() -> None:
     for bad_token in ("", "not-a-token", "a.b", "a.b.c.d"):
         with pytest.raises(AppException):
             verify_token(bad_token)
+
+
+def test_token_without_sub_raises_unauthorized() -> None:
+    now = int(time.time())
+    token = _raw_token({"iat": now, "exp": now + 3600})
+    with pytest.raises(AppException) as exc:
+        verify_token(token)
+    assert exc.value.code == ErrorCode.UNAUTHORIZED.value
+
+
+def test_token_with_null_sub_raises_unauthorized() -> None:
+    now = int(time.time())
+    token = _raw_token({"sub": None, "iat": now, "exp": now + 3600})
+    with pytest.raises(AppException):
+        verify_token(token)
+
+
+def test_token_with_empty_sub_raises_unauthorized() -> None:
+    now = int(time.time())
+    token = _raw_token({"sub": "", "iat": now, "exp": now + 3600})
+    with pytest.raises(AppException):
+        verify_token(token)
+
+
+def test_token_with_non_string_sub_raises_unauthorized() -> None:
+    now = int(time.time())
+    token = _raw_token({"sub": 12345, "iat": now, "exp": now + 3600})
+    with pytest.raises(AppException):
+        verify_token(token)
+
+
+def test_token_with_missing_typ_raises_unauthorized() -> None:
+    now = int(time.time())
+    token = _raw_token(
+        {"sub": "user", "iat": now, "exp": now + 3600},
+        header={"alg": "HS256"},
+    )
+    with pytest.raises(AppException):
+        verify_token(token)
+
+
+def test_token_with_wrong_typ_raises_unauthorized() -> None:
+    now = int(time.time())
+    token = _raw_token(
+        {"sub": "user", "iat": now, "exp": now + 3600},
+        header={"alg": "HS256", "typ": "at+jwt"},
+    )
+    with pytest.raises(AppException):
+        verify_token(token)
+
+
+def test_token_with_non_object_header_raises_unauthorized() -> None:
+    now = int(time.time())
+    token = _raw_token(
+        {"sub": "user", "iat": now, "exp": now + 3600},
+        header=["not", "object"],
+    )
+    with pytest.raises(AppException):
+        verify_token(token)
+
+
+def test_token_with_non_object_payload_raises_unauthorized() -> None:
+    token = _raw_token(["not", "object"])
+    with pytest.raises(AppException):
+        verify_token(token)
 
 
 def test_api_key_verification() -> None:
