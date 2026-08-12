@@ -129,4 +129,7 @@ def verify_token(token: str) -> dict[str, Any]:
 
 def verify_api_key(api_key: str) -> bool:
     """Check an API key with a constant-time comparison."""
-    return hmac.compare_digest(api_key, settings.API_KEY)
+    return hmac.compare_digest(
+        api_key.encode("utf-8"),
+        settings.API_KEY.encode("utf-8"),
+    )

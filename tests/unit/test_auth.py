@@ -199,6 +199,7 @@ def test_api_key_verification() -> None:
     assert verify_api_key(settings.API_KEY)
     assert not verify_api_key("wrong-key")
     assert not verify_api_key(settings.API_KEY.upper())
+    assert not verify_api_key("你好")
 
 
 def test_protected_route_without_credentials_returns_401() -> None:
@@ -240,6 +241,15 @@ def test_protected_route_rejects_empty_token() -> None:
         headers={"Authorization": "Bearer "},
     )
     assert response.status_code == 401
+
+
+def test_protected_route_rejects_non_ascii_token() -> None:
+    response = _build_test_app().get(
+        "/protected",
+        headers={"Authorization": b"Bearer \xe4\xbd\xa0\xe5\xa5\xbd"},
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
 
 
 def test_app_exception_handler_returns_structured_body() -> None:
