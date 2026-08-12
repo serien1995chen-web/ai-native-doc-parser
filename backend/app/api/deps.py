@@ -8,6 +8,7 @@ from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import get_db
 from app.core.exceptions import AppException
@@ -53,7 +54,19 @@ async def get_current_user_id(
                 is_active=True,
             )
             db.add(user)
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                result = await db.execute(
+                    select(User).where(User.username == "api-key")
+                )
+                user = result.scalar_one_or_none()
+                if user is None:
+                    raise AppException(
+                        ErrorCode.UNAUTHORIZED,
+                        "Unable to create API key user",
+                    ) from None
         return user.id
 
     try:

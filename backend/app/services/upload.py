@@ -74,7 +74,11 @@ class UploadService:
         file_id = uuid.uuid4()
         safe_name = _safe_filename(original_name)
         relative_path = _relative_path(file_id, safe_name)
-        await self.storage.save_bytes(relative_path, data)
+        try:
+            await self.storage.save_bytes(relative_path, data)
+        except Exception:
+            await db.rollback()
+            raise
         now = datetime.now(timezone.utc)
         record = File(
             id=file_id,
@@ -91,7 +95,11 @@ class UploadService:
             updated_at=now,
         )
         db.add(record)
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
         return FileUploadResponse(
             file_id=file_id,
             original_name=safe_name,
@@ -122,6 +130,11 @@ class UploadService:
             ) from None
         if not data:
             raise AppException(ErrorCode.UNSUPPORTED_FORMAT, "Screenshot data is empty")
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise AppException(
+                ErrorCode.UNSUPPORTED_FORMAT,
+                "Screenshot data is not a PNG image",
+            )
         return await self.upload_file(
             db,
             user_id,
@@ -151,7 +164,11 @@ class UploadService:
         file_id = uuid.uuid4()
         safe_name = f"paste-{file_id}.txt"
         relative_path = _relative_path(file_id, safe_name)
-        await self.storage.save_text(relative_path, content)
+        try:
+            await self.storage.save_text(relative_path, content)
+        except Exception:
+            await db.rollback()
+            raise
         content_type = (
             "text_block"
             if type_hint == "text"
@@ -176,7 +193,11 @@ class UploadService:
             updated_at=now,
         )
         db.add(record)
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
         return FileUploadResponse(
             file_id=file_id,
             original_name=safe_name,

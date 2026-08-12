@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_user_id
 from app.core.config import settings
@@ -47,6 +48,16 @@ class FakeStorage(StorageService):
 
     async def read_bytes(self, relative_path: str) -> bytes:
         return self.data[relative_path]
+
+
+class FailingStorage(FakeStorage):
+    """Storage that fails on writes."""
+
+    async def save_bytes(self, relative_path: str, data: bytes) -> None:
+        raise OSError("disk full")
+
+    async def save_text(self, relative_path: str, content: str) -> None:
+        raise OSError("disk full")
 
 
 class FakeResult:
@@ -218,6 +229,60 @@ async def test_upload_screenshot_rejects_empty_data() -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_screenshot_rejects_non_png_magic() -> None:
+    db = _make_db()
+    service, _ = _service(db)
+    fake_png = base64.b64encode(b"not a png").decode()
+
+    with pytest.raises(AppException) as exc:
+        await service.upload_screenshot(
+            db,
+            uuid.uuid4(),
+            f"data:image/png;base64,{fake_png}",
+        )
+    assert exc.value.code == ErrorCode.UNSUPPORTED_FORMAT.value
+
+
+@pytest.mark.asyncio
+async def test_upload_file_storage_failure_rolls_back_and_no_record() -> None:
+    db = _make_db()
+    db.execute.return_value = FakeResult([])
+    service = UploadService(FailingStorage())
+
+    with pytest.raises(OSError):
+        await service.upload_file(db, uuid.uuid4(), "a.txt", "text/plain", b"hello")
+
+    db.add.assert_not_called()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_commit_failure_rolls_back() -> None:
+    db = _make_db()
+    db.execute.return_value = FakeResult([])
+    db.commit.side_effect = RuntimeError("commit failed")
+    service, _ = _service(db)
+
+    with pytest.raises(RuntimeError):
+        await service.upload_file(db, uuid.uuid4(), "a.txt", "text/plain", b"hello")
+
+    db.add.assert_called_once()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_text_storage_failure_rolls_back_and_no_record() -> None:
+    db = _make_db()
+    service = UploadService(FailingStorage())
+
+    with pytest.raises(OSError):
+        await service.upload_text(db, uuid.uuid4(), "hello", "text")
+
+    db.add.assert_not_called()
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_upload_text_success() -> None:
     db = _make_db()
     db.execute.return_value = FakeResult([])
@@ -357,6 +422,26 @@ async def test_delete_file_not_found() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_file_storage_failure_keeps_db_record() -> None:
+    db = _make_db()
+    file = _make_file(stored_path="2026/01/01/a.txt")
+    db.execute.return_value = FakeResult([file])
+    storage = FakeStorage()
+    storage.data[file.stored_path] = b"content"
+
+    async def fail_delete(relative_path: str) -> None:
+        raise OSError("delete failed")
+
+    storage.delete = fail_delete
+    service = UploadService(storage)
+
+    with pytest.raises(OSError):
+        await service.delete_file(db, uuid.uuid4(), file.id)
+
+    db.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_current_user_id_jwt_user_exists() -> None:
     db = _make_db()
     user = _make_user()
@@ -399,3 +484,17 @@ async def test_get_current_user_id_api_key_existing_user() -> None:
 
     assert result == user.id
     db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_id_api_key_concurrent_insert_rolls_back_and_requeries() -> None:
+    db = _make_db()
+    existing = _make_user(username="api-key")
+    db.execute.side_effect = [FakeResult([]), FakeResult([existing])]
+    db.commit.side_effect = IntegrityError("INSERT", {}, Exception("duplicate"))
+
+    result = await get_current_user_id(db, identity="api-key")
+
+    assert result == existing.id
+    db.add.assert_called_once()
+    db.rollback.assert_awaited_once()

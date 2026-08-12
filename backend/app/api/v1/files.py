@@ -7,7 +7,9 @@ import uuid
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
 from app.api.deps import get_current_user_id, get_db
-from app.schemas.common import APIResponse, FileStatus, PaginatedResponse
+from app.core.config import settings
+from app.core.exceptions import AppException
+from app.schemas.common import APIResponse, ErrorCode, FileStatus, PaginatedResponse
 from app.schemas.file import (
     FileListParams,
     FileResponse,
@@ -19,6 +21,21 @@ from app.services.storage import LocalStorageService, StorageService
 from app.services.upload import UploadService
 
 router = APIRouter(prefix="/files", tags=["files"])
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    """Read an upload in chunks, rejecting oversized bodies early."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > settings.MAX_UPLOAD_SIZE:
+            raise AppException(ErrorCode.FILE_TOO_LARGE, "File exceeds upload size limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def get_storage_service() -> StorageService:
@@ -41,7 +58,7 @@ async def upload_file(
     service: UploadService = Depends(get_upload_service),
 ) -> APIResponse[FileUploadResponse]:
     """Upload a file through multipart form data."""
-    data = await file.read()
+    data = await _read_upload(file)
     result = await service.upload_file(
         db,
         user_id,
