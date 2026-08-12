@@ -13,7 +13,7 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_current_user
+from app.api.deps import AuthIdentity, get_current_user
 from app.core.config import settings
 from app.core.exceptions import (
     AppException,
@@ -55,8 +55,8 @@ def _build_test_app() -> TestClient:
     app.add_exception_handler(Exception, generic_exception_handler)
 
     @app.get("/protected")
-    async def protected(user: str = Depends(get_current_user)) -> dict[str, str]:
-        return {"user": user}
+    async def protected(user: AuthIdentity = Depends(get_current_user)) -> dict[str, str]:
+        return {"user": user.subject}
 
     return TestClient(app)
 

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin"
     MAX_UPLOAD_SIZE: int = 104857600
+    UPLOAD_DIR: str = "/data/uploads"
     L1_CONFIDENCE_THRESHOLD: float = 0.95
     L2_CONFIDENCE_THRESHOLD: float = 0.90
     L3_CONFIDENCE_THRESHOLD: float = 0.85
