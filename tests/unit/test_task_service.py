@@ -15,15 +15,22 @@ from app.core.exceptions import AppException
 from app.models import File, ParseTask
 from app.schemas.common import ErrorCode, TaskStatus
 from app.schemas.task import TaskListParams
+from app.services.parser_router import ParserRouter
 from app.services.task_service import TaskService
 
 
 class FakeResult:
     """Minimal DB result stub."""
 
-    def __init__(self, rows: list[Any], total: int | None = None) -> None:
+    def __init__(
+        self,
+        rows: list[Any],
+        total: int | None = None,
+        rowcount: int = 0,
+    ) -> None:
         self._rows = rows
         self._total = len(rows) if total is None else total
+        self.rowcount = rowcount
 
     def scalar_one_or_none(self) -> Any:
         return self._rows[0] if self._rows else None
@@ -93,6 +100,57 @@ class LockingFakeDB:
             self.locked = False
             self.release_event.set()
             self.release_event = asyncio.Event()
+
+
+class RaceFakeDB:
+    """Fake session that reports rowcount for conditional retry claims."""
+
+    def __init__(self, task: ParseTask, file: File) -> None:
+        self.task = task
+        self.file = file
+        self.commits = 0
+
+    async def execute(self, statement: Any) -> FakeResult:
+        sql = str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        if sql.lstrip().upper().startswith("UPDATE"):
+            rowcount = (
+                1 if self.task.status == TaskStatus.QUEUED.value else 0
+            )
+            return FakeResult([], rowcount=rowcount)
+        if "FROM parse_tasks" in sql:
+            return FakeResult([self.task])
+        if "FROM files" in sql:
+            return FakeResult([self.file])
+        return FakeResult([])
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def rollback(self) -> None:
+        return None
+
+
+class CancelBeforeRerunRouter(ParserRouter):
+    """Router wrapper that lets cancel win after retry commits queued."""
+
+    def __init__(self, inner: ParserRouter, service: TaskService) -> None:
+        self.inner = inner
+        self.service = service
+
+    async def rerun_task(
+        self,
+        db: Any,
+        task: ParseTask,
+        file: File,
+        identified_type: str,
+    ) -> None:
+        await self.service.cancel_task(db, task.user_id, task.id)
+        await self.inner.rerun_task(db, task, file, identified_type)
 
 
 def _make_file() -> File:
@@ -299,30 +357,23 @@ async def test_concurrent_retry_only_one_succeeds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_and_retry_race_only_cancel_succeeds() -> None:
-    task = _make_task(status="queued")
+async def test_retry_aborts_when_cancel_wins_before_rerun() -> None:
+    task = _make_task(parser_type="pdf", retry_count=0)
     file = _make_file()
-    db = _db(FakeResult([task]), FakeResult([file]), FakeResult([task]))
-    service = _service()
-
-    results = await asyncio.gather(
-        service.cancel_task(db, task.user_id, task.id),
-        service.retry_task(db, task.user_id, task.id),
-        return_exceptions=True,
+    file.identified_type = "pdf"
+    db = RaceFakeDB(task, file)
+    service = TaskService(
+        parser_router=CancelBeforeRerunRouter(ParserRouter(), TaskService())
     )
 
-    successes = [result for result in results if not isinstance(result, BaseException)]
-    conflicts = [
-        result
-        for result in results
-        if isinstance(result, AppException)
-        and result.code == ErrorCode.TASK_STATE_CONFLICT.value
-    ]
-    assert len(successes) == 1
-    assert len(conflicts) == 1
+    with pytest.raises(AppException) as exc:
+        await service.retry_task(db, task.user_id, task.id)
+
+    assert exc.value.code == ErrorCode.TASK_STATE_CONFLICT.value
     assert task.status == TaskStatus.CANCELLED.value
     assert file.status == "failed"
     assert file.error_message == "Task cancelled"
+    assert task.retry_count == 1
 
 
 @pytest.mark.asyncio

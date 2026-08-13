@@ -14,7 +14,7 @@ from app.core.exceptions import AppException
 from app.models import File, ParseResult as ORMResult, ParseTask
 from app.parsers import ParserRegistry
 from app.parsers.base import BaseParser, ParseResult, ParserInfo
-from app.schemas.common import ErrorCode
+from app.schemas.common import ErrorCode, TaskStatus
 from app.services.parser_router import ParserRouter
 from app.services.storage import StorageService
 from app.services.task_queue import PARSE_IMAGE_TASK, PARSE_PDF_TASK
@@ -24,8 +24,9 @@ from app.worker import WorkerSettings, parse_image_task, parse_pdf_task
 class FakeResult:
     """Minimal DB result stub."""
 
-    def __init__(self, rows: list[Any]) -> None:
+    def __init__(self, rows: list[Any], rowcount: int = 0) -> None:
         self._rows = rows
+        self.rowcount = rowcount
 
     def scalar_one_or_none(self) -> Any:
         return self._rows[0] if self._rows else None
@@ -57,8 +58,10 @@ class FakeDB:
         self,
         file: File | None,
         fail_on_commit: int | None = None,
+        task: ParseTask | None = None,
     ) -> None:
         self.file = file
+        self.task = task
         self.added: list[Any] = []
         self.pending: list[Any] = []
         self.committed: list[Any] = []
@@ -69,6 +72,20 @@ class FakeDB:
 
     async def execute(self, statement: Any) -> FakeResult:
         self.executed.append(statement)
+        sql = str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        if sql.lstrip().upper().startswith("UPDATE"):
+            rowcount = (
+                1
+                if self.task is not None
+                and self.task.status == TaskStatus.QUEUED.value
+                else 0
+            )
+            return FakeResult([], rowcount=rowcount)
         return FakeResult([self.file] if self.file is not None else [])
 
     def add(self, obj: Any) -> None:
@@ -185,7 +202,7 @@ async def test_sync_parser_final_commit_failure_discards_results() -> None:
     parser = StubParser(supported_types=["txt"])
     ParserRegistry.register(parser)
     file = _make_file()
-    db = FakeDB(file, fail_on_commit=3)
+    db = FakeDB(file, fail_on_commit=2)
     router = ParserRouter(storage=FakeStorage())
 
     with pytest.raises(AppException) as exc:
@@ -219,7 +236,7 @@ async def test_rerun_task_clears_old_results_before_requeue() -> None:
     file = _make_file()
     task = _make_task(file.id, file.user_id)
     task.status = "queued"
-    db = FakeDB(file)
+    db = FakeDB(file, task=task)
     router = ParserRouter(storage=FakeStorage())
 
     with patch(
@@ -229,6 +246,57 @@ async def test_rerun_task_clears_old_results_before_requeue() -> None:
         await router.rerun_task(db, task, file, "pdf")
 
     enqueue.assert_awaited_once_with(PARSE_PDF_TASK, file_id=str(file.id))
+    assert task.status == TaskStatus.PROCESSING.value
+    statements = [
+        str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        for statement in db.executed
+    ]
+    assert any("DELETE FROM parse_results" in sql for sql in statements)
+
+
+@pytest.mark.asyncio
+async def test_rerun_task_aborts_when_task_no_longer_queued() -> None:
+    file = _make_file()
+    task = _make_task(file.id, file.user_id)
+    task.status = "cancelled"
+    db = FakeDB(file, task=task)
+    router = ParserRouter(storage=FakeStorage())
+
+    with patch(
+        "app.services.parser_router.enqueue_job",
+        new=AsyncMock(),
+    ) as enqueue:
+        with pytest.raises(AppException) as exc:
+            await router.rerun_task(db, task, file, "pdf")
+
+    assert exc.value.code == ErrorCode.TASK_STATE_CONFLICT.value
+    enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rerun_task_enqueue_failure_rolls_back_result_cleanup() -> None:
+    file = _make_file()
+    task = _make_task(file.id, file.user_id)
+    task.status = "queued"
+    db = FakeDB(file, task=task)
+    router = ParserRouter(storage=FakeStorage())
+
+    with patch(
+        "app.services.parser_router.enqueue_job",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        with pytest.raises(AppException) as exc:
+            await router.rerun_task(db, task, file, "pdf")
+
+    assert exc.value.code == ErrorCode.PARSER_FAILED.value
+    assert task.status == "failed"
+    assert file.status == "failed"
+    assert db.rollbacks == 1
     statements = [
         str(
             statement.compile(
