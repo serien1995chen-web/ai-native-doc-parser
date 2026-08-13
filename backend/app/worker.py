@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models import File, ParseTask
 from app.parsers import ParserRegistry
+from app.services.output_formatter import UnifiedOutputFormatter
 from app.services.storage import LocalStorageService
 from app.services.task_queue import (
     PARSE_IMAGE_TASK,
@@ -71,7 +72,19 @@ async def _run_worker_task(ctx, file_id, parser_type, job_name):
 
         try:
             path = storage.resolve_path(file.stored_path)
-            parser.parse(str(path))
+            parser_result = parser.parse(str(path))
+            formatter = UnifiedOutputFormatter()
+            formatted = formatter.format_blocks(
+                parser_result.json_data.get("blocks", []),
+                parser_type,
+                parser_result.json_data.get("meta", {}),
+            )
+            await formatter.persist_parse_results(
+                db,
+                task.id,
+                file.id,
+                formatted,
+            )
             task.progress = 100
             task.status = "completed"
             task.completed_at = datetime.now(timezone.utc)

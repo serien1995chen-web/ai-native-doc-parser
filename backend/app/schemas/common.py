@@ -54,6 +54,7 @@ class ErrorCode(str, Enum):
     UNAUTHORIZED = "UNAUTHORIZED"
     FORBIDDEN = "FORBIDDEN"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    CONVERTER_UNAVAILABLE = "CONVERTER_UNAVAILABLE"
 
     @property
     def status_code(self) -> int:
@@ -69,6 +70,7 @@ class ErrorCode(str, Enum):
             ErrorCode.UNAUTHORIZED: 401,
             ErrorCode.FORBIDDEN: 403,
             ErrorCode.INTERNAL_ERROR: 500,
+            ErrorCode.CONVERTER_UNAVAILABLE: 503,
         }[self]
 
 
