@@ -13,7 +13,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.dialects import postgresql
 
 from app.api.deps import get_current_user_id, get_db
-from app.api.v1.files import get_file_type_id_service, get_storage_service
+from app.api.v1.files import (
+    get_file_type_id_service,
+    get_parser_router,
+    get_storage_service,
+)
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.main import create_app
@@ -40,6 +44,19 @@ class FakeIdentifier:
             final_layer=3,
             is_final=True,
         )
+
+
+class FakeParserRouter:
+    """Stand-in parser router for API integration tests."""
+
+    async def route(
+        self,
+        db: Any,
+        file_id: uuid.UUID,
+        identified_type: str,
+        user_id: uuid.UUID,
+    ) -> None:
+        return None
 
 
 class FakeResult:
@@ -157,10 +174,14 @@ def api_context(tmp_path: Path) -> tuple[Any, FakeAsyncSession, LocalStorageServ
     def override_file_type_id() -> FakeIdentifier:
         return FakeIdentifier()
 
+    def override_parser_router() -> FakeParserRouter:
+        return FakeParserRouter()
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user_id] = override_get_user_id
     app.dependency_overrides[get_storage_service] = override_storage
     app.dependency_overrides[get_file_type_id_service] = override_file_type_id
+    app.dependency_overrides[get_parser_router] = override_parser_router
     return app, db, storage, user_id
 
 

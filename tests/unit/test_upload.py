@@ -106,6 +106,22 @@ class FailingIdentifier(FakeIdentifier):
         raise RuntimeError("identification failed")
 
 
+class FakeParserRouter:
+    """Stand-in parser router used by upload unit tests."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[uuid.UUID, str]] = []
+
+    async def route(
+        self,
+        db: Any,
+        file_id: uuid.UUID,
+        identified_type: str,
+        user_id: uuid.UUID,
+    ) -> None:
+        self.calls.append((file_id, identified_type))
+
+
 class FakeResult:
     """Minimal async DB result stub."""
 
@@ -162,11 +178,13 @@ def _service(
     db: AsyncMock,
     storage: FakeStorage | None = None,
     identifier: FakeIdentifier | None = None,
+    parser_router: FakeParserRouter | None = None,
 ) -> tuple[UploadService, FakeStorage]:
     fake_storage = storage or FakeStorage()
     service = UploadService(
         fake_storage,
         file_type_id_service=identifier or FakeIdentifier(),
+        parser_router=parser_router or FakeParserRouter(),
     )
     return service, fake_storage
 
@@ -436,6 +454,24 @@ async def test_upload_text_passes_uploaded_type_to_identifier() -> None:
     await service.upload_text(db, uuid.uuid4(), "hello", "text")
 
     assert identifier.calls[0][2] == "text"
+
+
+@pytest.mark.asyncio
+async def test_upload_calls_parser_router() -> None:
+    db = _make_db()
+    db.execute.return_value = FakeResult([])
+    identifier = FakeIdentifier()
+    parser_router = FakeParserRouter()
+    service, _ = _service(
+        db,
+        identifier=identifier,
+        parser_router=parser_router,
+    )
+
+    await service.upload_file(db, uuid.uuid4(), "a.txt", "text/plain", b"hello")
+
+    assert len(parser_router.calls) == 1
+    assert parser_router.calls[0][1] == "txt"
 
 
 @pytest.mark.asyncio
