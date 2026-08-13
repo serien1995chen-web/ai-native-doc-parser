@@ -46,6 +46,8 @@ class FileResponse(BaseModel):
     file_size: int | None = None
     status: FileStatus
     mime_type: str | None = None
+    identified_type: str | None = None
+    identified_confidence: float | None = None
     created_at: datetime
     updated_at: datetime
 

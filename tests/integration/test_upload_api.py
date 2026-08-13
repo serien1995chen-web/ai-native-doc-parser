@@ -13,12 +13,32 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.dialects import postgresql
 
 from app.api.deps import get_current_user_id, get_db
-from app.api.v1.files import get_storage_service
+from app.api.v1.files import get_file_type_id_service, get_storage_service
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.main import create_app
 from app.models import File
+from app.schemas.identification import IdentificationResult
 from app.services.storage import LocalStorageService
+
+
+class FakeIdentifier:
+    """Stand-in identification service for API integration tests."""
+
+    async def identify(
+        self,
+        db: Any,
+        file_id: uuid.UUID,
+        path: Path,
+    ) -> IdentificationResult:
+        return IdentificationResult(
+            file_id=file_id,
+            identified_type="txt",
+            content_type="text_block",
+            identified_confidence=0.85,
+            final_layer=3,
+            is_final=True,
+        )
 
 
 class FakeResult:
@@ -133,9 +153,13 @@ def api_context(tmp_path: Path) -> tuple[Any, FakeAsyncSession, LocalStorageServ
     def override_storage() -> LocalStorageService:
         return storage
 
+    def override_file_type_id() -> FakeIdentifier:
+        return FakeIdentifier()
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user_id] = override_get_user_id
     app.dependency_overrides[get_storage_service] = override_storage
+    app.dependency_overrides[get_file_type_id_service] = override_file_type_id
     return app, db, storage, user_id
 
 
@@ -186,7 +210,7 @@ async def test_upload_file_success(api_context: Any) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["data"]["status"] == "uploaded"
+    assert body["data"]["status"] == "parsing"
     assert len(db.files) == 1
     assert len([path for path in storage.root.rglob("*") if path.is_file()]) == 1
 
@@ -310,7 +334,7 @@ async def test_list_files_filters_and_paginates(api_context: Any) -> None:
         )
         response = await client.get(
             "/api/v1/files",
-            params={"search": "report", "status": "uploaded", "sort": "created_at:desc"},
+            params={"search": "report", "status": "parsing", "sort": "created_at:desc"},
         )
     assert response.status_code == 200
     body = response.json()

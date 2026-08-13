@@ -18,6 +18,7 @@ from app.schemas.file import (
     TextUploadRequest,
 )
 from app.services.storage import LocalStorageService, StorageService
+from app.services.file_type_id import FileTypeIDService
 from app.services.upload import UploadService
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -43,11 +44,17 @@ def get_storage_service() -> StorageService:
     return LocalStorageService()
 
 
+def get_file_type_id_service() -> FileTypeIDService:
+    """Provide the file type identification service."""
+    return FileTypeIDService()
+
+
 def get_upload_service(
     storage: StorageService = Depends(get_storage_service),
+    file_type_id_service: FileTypeIDService = Depends(get_file_type_id_service),
 ) -> UploadService:
     """Provide an UploadService bound to the request storage."""
-    return UploadService(storage)
+    return UploadService(storage, file_type_id_service=file_type_id_service)
 
 
 @router.post("/upload", response_model=APIResponse[FileUploadResponse])
