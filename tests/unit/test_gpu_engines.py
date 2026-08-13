@@ -149,7 +149,7 @@ def test_pytorch_run_layout_uses_engine(monkeypatch: pytest.MonkeyPatch) -> None
         def detect(self, image_path: Path) -> list[dict]:
             return [{"class": "text", "bbox": [1, 2, 3, 4], "confidence": 0.9}]
 
-    monkeypatch.setattr(pytorch_server, "LayoutEngine", FakeLayoutEngine)
+    monkeypatch.setattr(pytorch_server, "_layout_engine", FakeLayoutEngine())
     assert pytorch_server._run_layout(Path("fake.png")) == {
         "detections": [
             {"class": "text", "bbox": [1, 2, 3, 4], "confidence": 0.9}
@@ -165,7 +165,7 @@ def test_paddle_run_ocr_uses_engine(monkeypatch: pytest.MonkeyPatch) -> None:
         def recognize(self, image_path: Path) -> list[dict]:
             return [{"text": "hello", "bbox": [1, 2, 3, 4], "confidence": 0.9}]
 
-    monkeypatch.setattr(paddle_server, "OCREngine", FakeOCREngine)
+    monkeypatch.setattr(paddle_server, "_ocr_engine", FakeOCREngine())
     assert paddle_server._run_ocr(Path("fake.png")) == {
         "items": [{"text": "hello", "bbox": [1, 2, 3, 4], "confidence": 0.9}]
     }
@@ -175,10 +175,10 @@ def test_pytorch_run_layout_maps_model_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class MissingEngine:
-        def __init__(self) -> None:
+        def detect(self, image_path: Path) -> list[dict]:
             raise pytorch_server.GPUModelNotReadyError("model missing")
 
-    monkeypatch.setattr(pytorch_server, "LayoutEngine", MissingEngine)
+    monkeypatch.setattr(pytorch_server, "_layout_engine", MissingEngine())
     with pytest.raises(HTTPException) as exc_info:
         pytorch_server._run_layout(Path("fake.png"))
     assert exc_info.value.status_code == 503
@@ -188,10 +188,10 @@ def test_paddle_run_ocr_maps_unavailable_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class UnavailableEngine:
-        def __init__(self) -> None:
+        def recognize(self, image_path: Path) -> list[dict]:
             raise paddle_server.GPUUnavailableError("gpu unavailable")
 
-    monkeypatch.setattr(paddle_server, "OCREngine", UnavailableEngine)
+    monkeypatch.setattr(paddle_server, "_ocr_engine", UnavailableEngine())
     with pytest.raises(HTTPException) as exc_info:
         paddle_server._run_ocr(Path("fake.png"))
     assert exc_info.value.status_code == 503
@@ -207,7 +207,7 @@ def test_pytorch_infer_layout_dispatches(
         def detect(self, image_path: Path) -> list[dict]:
             return [{"class": "text", "bbox": [1, 2, 3, 4], "confidence": 0.9}]
 
-    monkeypatch.setattr(pytorch_server, "LayoutEngine", FakeLayoutEngine)
+    monkeypatch.setattr(pytorch_server, "_layout_engine", FakeLayoutEngine())
     client = TestClient(pytorch_server.app)
     image_b64 = base64.b64encode(b"fake-image").decode()
     response = client.post(
@@ -230,7 +230,7 @@ def test_paddle_infer_ocr_dispatches(monkeypatch: pytest.MonkeyPatch) -> None:
         def recognize(self, image_path: Path) -> list[dict]:
             return [{"text": "hello", "bbox": [1, 2, 3, 4], "confidence": 0.9}]
 
-    monkeypatch.setattr(paddle_server, "OCREngine", FakeOCREngine)
+    monkeypatch.setattr(paddle_server, "_ocr_engine", FakeOCREngine())
     client = TestClient(paddle_server.app)
     image_b64 = base64.b64encode(b"fake-image").decode()
     response = client.post(
@@ -268,3 +268,39 @@ def test_infer_rejects_bad_model_type_and_base64() -> None:
         json={"model_type": "ocr", "image_base64": "%%%"},
     )
     assert bad_paddle_base64.status_code == 400
+
+
+def test_pytorch_layout_engine_singleton_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CountingEngine:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def detect(self, image_path: Path) -> list[dict]:
+            self.calls += 1
+            return []
+
+    engine = CountingEngine()
+    monkeypatch.setattr(pytorch_server, "_layout_engine", engine)
+    pytorch_server._run_layout(Path("a.png"))
+    pytorch_server._run_layout(Path("b.png"))
+    assert engine.calls == 2
+
+
+def test_paddle_ocr_engine_singleton_reused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CountingEngine:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def recognize(self, image_path: Path) -> list[dict]:
+            self.calls += 1
+            return []
+
+    engine = CountingEngine()
+    monkeypatch.setattr(paddle_server, "_ocr_engine", engine)
+    paddle_server._run_ocr(Path("a.png"))
+    paddle_server._run_ocr(Path("b.png"))
+    assert engine.calls == 2

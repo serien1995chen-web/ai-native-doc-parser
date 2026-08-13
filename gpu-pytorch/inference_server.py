@@ -22,6 +22,8 @@ MODEL_BASE = Path(os.environ.get("MODEL_BASE", "/models"))
 
 app = FastAPI(title="GPU PyTorch Inference", version="1.0.0")
 
+_layout_engine = LayoutEngine()
+
 
 class HealthResponse(BaseModel):
     status: str
@@ -46,8 +48,7 @@ def _save_upload(upload: UploadFile, name: str) -> Path:
 
 def _run_layout(image_path: Path) -> dict[str, Any]:
     try:
-        engine = LayoutEngine()
-        detections = engine.detect(image_path)
+        detections = _layout_engine.detect(image_path)
         return {"detections": detections}
     except (GPUModelNotReadyError, GPUUnavailableError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

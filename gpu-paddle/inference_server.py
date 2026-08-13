@@ -21,6 +21,8 @@ MODEL_BASE = Path(os.environ.get("MODEL_BASE", "/models"))
 
 app = FastAPI(title="GPU PaddleOCR Inference", version="1.0.0")
 
+_ocr_engine = OCREngine()
+
 
 class HealthResponse(BaseModel):
     status: str
@@ -45,8 +47,7 @@ def _save_upload(upload: UploadFile, name: str) -> Path:
 
 def _run_ocr(image_path: Path) -> dict[str, Any]:
     try:
-        engine = OCREngine()
-        items = engine.recognize(image_path)
+        items = _ocr_engine.recognize(image_path)
         return {"items": items}
     except (GPUModelNotReadyError, GPUUnavailableError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
