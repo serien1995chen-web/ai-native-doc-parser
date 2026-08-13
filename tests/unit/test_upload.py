@@ -93,6 +93,13 @@ class FakeIdentifier:
         )
 
 
+class FailingIdentifier(FakeIdentifier):
+    """Identification service that raises during identify()."""
+
+    async def identify(self, db: Any, file_id: uuid.UUID, path: Path) -> IdentificationResult:
+        raise RuntimeError("identification failed")
+
+
 class FakeResult:
     """Minimal async DB result stub."""
 
@@ -168,7 +175,7 @@ async def test_upload_file_success() -> None:
     response = await service.upload_file(db, user_id, "hello.txt", "text/plain", b"hello")
 
     assert response.original_name == "hello.txt"
-    assert response.status == FileStatus.UPLOADED
+    assert response.status == FileStatus.PARSING
     assert len(storage.data) == 1
     record = db.add.call_args.args[0]
     assert record.status == "parsing"
@@ -424,11 +431,32 @@ async def test_upload_unknown_identification_sets_failed() -> None:
     )
     service, _ = _service(db, identifier=identifier)
 
-    await service.upload_file(db, uuid.uuid4(), "a.bin", None, b"\x00\x01")
+    response = await service.upload_file(db, uuid.uuid4(), "a.bin", None, b"\x00\x01")
 
     record = db.add.call_args.args[0]
     assert record.status == "failed"
     assert record.error_message == "File type could not be identified"
+    assert response.status == FileStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_upload_identification_exception_sets_failed() -> None:
+    db = _make_db()
+    db.execute.return_value = FakeResult([])
+    service, _ = _service(db, identifier=FailingIdentifier())
+
+    response = await service.upload_file(
+        db,
+        uuid.uuid4(),
+        "a.txt",
+        "text/plain",
+        b"hello",
+    )
+
+    record = db.add.call_args.args[0]
+    assert record.status == "failed"
+    assert record.error_message == "File type identification failed"
+    assert response.status == FileStatus.FAILED
 
 
 @pytest.mark.asyncio

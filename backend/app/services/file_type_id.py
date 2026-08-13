@@ -185,6 +185,10 @@ class FileTypeIDService:
             return self._magic_result("image", "image", 2, head)
         if head.startswith(b"BM"):
             return self._magic_result("image", "image", 2, head)
+        if head.startswith((b"GIF87a", b"GIF89a")):
+            return self._magic_result("image", "image", 2, head)
+        if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+            return self._magic_result("image", "image", 2, head)
         if head.startswith(b"PK\x03\x04"):
             container_type = self._zip_container_type(file_path)
             if container_type:

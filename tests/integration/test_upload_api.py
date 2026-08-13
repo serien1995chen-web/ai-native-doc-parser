@@ -210,7 +210,7 @@ async def test_upload_file_success(api_context: Any) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["data"]["status"] == "uploaded"
+    assert body["data"]["status"] == "parsing"
     assert len(db.files) == 1
     assert len([path for path in storage.root.rglob("*") if path.is_file()]) == 1
 

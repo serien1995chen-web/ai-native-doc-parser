@@ -158,7 +158,7 @@ class UploadService:
             file_id=file_id,
             original_name=safe_name,
             file_size=len(data),
-            status=FileStatus.UPLOADED,
+            status=FileStatus(record.status),
         )
 
     async def upload_screenshot(
@@ -269,7 +269,7 @@ class UploadService:
             file_id=file_id,
             original_name=safe_name,
             file_size=len(data),
-            status=FileStatus.UPLOADED,
+            status=FileStatus(record.status),
         )
 
     async def list_files(

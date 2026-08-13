@@ -65,6 +65,8 @@ def test_layer1_extension_mapping() -> None:
         (b"\x89PNG\r\n\x1a\n" + b"data", "image"),
         (b"\xff\xd8\xff\xe0" + b"data", "image"),
         (b"BM" + b"data", "image"),
+        (b"GIF89a" + b"data", "image"),
+        (b"RIFF\x00\x00\x00\x00WEBP" + b"data", "image"),
     ],
 )
 def test_layer2_magic_detection(
