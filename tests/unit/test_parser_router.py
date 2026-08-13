@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.core.exceptions import AppException
-from app.models import File, ParseTask
+from app.models import File, ParseResult as ORMResult, ParseTask
 from app.parsers import ParserRegistry
 from app.parsers.base import BaseParser, ParseResult, ParserInfo
 from app.schemas.common import ErrorCode
@@ -52,22 +52,36 @@ class FakeStorage(StorageService):
 class FakeDB:
     """In-memory session supporting parser router queries."""
 
-    def __init__(self, file: File | None) -> None:
+    def __init__(
+        self,
+        file: File | None,
+        fail_on_commit: int | None = None,
+    ) -> None:
         self.file = file
         self.added: list[Any] = []
+        self.pending: list[Any] = []
+        self.committed: list[Any] = []
         self.commits = 0
+        self.rollbacks = 0
+        self.fail_on_commit = fail_on_commit
 
     async def execute(self, statement: Any) -> FakeResult:
         return FakeResult([self.file] if self.file is not None else [])
 
     def add(self, obj: Any) -> None:
         self.added.append(obj)
+        self.pending.append(obj)
 
     async def commit(self) -> None:
         self.commits += 1
+        if self.fail_on_commit is not None and self.commits == self.fail_on_commit:
+            raise RuntimeError("commit failed")
+        self.committed.extend(self.pending)
+        self.pending.clear()
 
     async def rollback(self) -> None:
-        return None
+        self.rollbacks += 1
+        self.pending.clear()
 
 
 class StubParser(BaseParser):
@@ -164,6 +178,26 @@ async def test_sync_parser_failure_marks_failed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sync_parser_final_commit_failure_discards_results() -> None:
+    parser = StubParser(supported_types=["txt"])
+    ParserRegistry.register(parser)
+    file = _make_file()
+    db = FakeDB(file, fail_on_commit=3)
+    router = ParserRouter(storage=FakeStorage())
+
+    with pytest.raises(AppException) as exc:
+        await router.route(db, file.id, "txt", file.user_id)
+
+    assert exc.value.code == ErrorCode.PARSER_FAILED.value
+    task = db.added[0]
+    assert task.status == "failed"
+    assert file.status == "failed"
+    assert db.rollbacks == 1
+    assert any(isinstance(row, ORMResult) for row in db.added)
+    assert not any(isinstance(row, ORMResult) for row in db.committed)
+
+
+@pytest.mark.asyncio
 async def test_async_pdf_creates_task_and_enqueues() -> None:
     file = _make_file()
     db = FakeDB(file)
@@ -237,11 +271,20 @@ async def test_missing_file_raises_not_found() -> None:
 class FakeWorkerSession:
     """Async session stub for worker tests."""
 
-    def __init__(self, file: File, task: ParseTask) -> None:
+    def __init__(
+        self,
+        file: File,
+        task: ParseTask,
+        fail_on_commit: int | None = None,
+    ) -> None:
         self.file = file
         self.task = task
         self.commits = 0
+        self.rollbacks = 0
         self.added: list[Any] = []
+        self.pending: list[Any] = []
+        self.committed: list[Any] = []
+        self.fail_on_commit = fail_on_commit
 
     async def __aenter__(self) -> FakeWorkerSession:
         return self
@@ -257,15 +300,21 @@ class FakeWorkerSession:
 
     async def commit(self) -> None:
         self.commits += 1
+        if self.fail_on_commit is not None and self.commits == self.fail_on_commit:
+            raise RuntimeError("commit failed")
+        self.committed.extend(self.pending)
+        self.pending.clear()
 
     async def rollback(self) -> None:
-        return None
+        self.rollbacks += 1
+        self.pending.clear()
 
     async def close(self) -> None:
         return None
 
     def add(self, obj: Any) -> None:
         self.added.append(obj)
+        self.pending.append(obj)
 
 
 @pytest.mark.asyncio
@@ -346,6 +395,30 @@ async def test_worker_marks_failed_after_retry_limit() -> None:
     assert task.retry_count == 3
     assert task.status == "failed"
     assert file.status == "failed"
+    enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_final_commit_failure_discards_results() -> None:
+    parser = StubParser(supported_types=["pdf"])
+    ParserRegistry.register(parser)
+    file = _make_file()
+    task = _make_task(file.id, file.user_id)
+    task.retry_count = 2
+    session = FakeWorkerSession(file, task, fail_on_commit=2)
+
+    with patch("app.worker.AsyncSessionLocal", return_value=session), patch(
+        "app.worker.enqueue_job",
+        new=AsyncMock(),
+    ) as enqueue:
+        await parse_pdf_task({}, str(file.id))
+
+    assert task.retry_count == 3
+    assert task.status == "failed"
+    assert file.status == "failed"
+    assert session.rollbacks == 1
+    assert any(isinstance(row, ORMResult) for row in session.added)
+    assert not any(isinstance(row, ORMResult) for row in session.committed)
     enqueue.assert_not_called()
 
 

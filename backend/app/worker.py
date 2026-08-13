@@ -78,6 +78,7 @@ async def _run_worker_task(ctx, file_id, parser_type, job_name):
                 parser_result.json_data.get("blocks", []),
                 parser_type,
                 parser_result.json_data.get("meta", {}),
+                page_count=parser_result.page_count,
             )
             await formatter.persist_parse_results(
                 db,
@@ -91,7 +92,9 @@ async def _run_worker_task(ctx, file_id, parser_type, job_name):
             file.status = "completed"
             await db.commit()
         except Exception as exc:
-            task.retry_count = (task.retry_count or 0) + 1
+            retry_count = (task.retry_count or 0) + 1
+            await db.rollback()
+            task.retry_count = retry_count
             task.error_message = str(exc)
             task.error_details = {"type": type(exc).__name__}
             if task.retry_count < 3:
