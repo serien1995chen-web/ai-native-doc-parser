@@ -143,6 +143,7 @@ async def test_sync_parser_executes_and_updates_status() -> None:
     assert task.status == "completed"
     assert task.progress == 100
     assert file.status == "completed"
+    assert len(db.added) == 3
 
 
 @pytest.mark.asyncio
@@ -240,6 +241,7 @@ class FakeWorkerSession:
         self.file = file
         self.task = task
         self.commits = 0
+        self.added: list[Any] = []
 
     async def __aenter__(self) -> FakeWorkerSession:
         return self
@@ -261,6 +263,9 @@ class FakeWorkerSession:
 
     async def close(self) -> None:
         return None
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
 
 
 @pytest.mark.asyncio
@@ -300,6 +305,7 @@ async def test_worker_success_marks_completed() -> None:
     assert task.status == "completed"
     assert task.progress == 100
     assert file.status == "completed"
+    assert len(session.added) == 2
 
 
 @pytest.mark.asyncio

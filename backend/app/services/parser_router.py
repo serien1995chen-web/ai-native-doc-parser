@@ -13,6 +13,7 @@ from app.models import File, ParseTask
 from app.parsers import ParserRegistry
 from app.schemas.common import ErrorCode, FileStatus
 from app.services.storage import LocalStorageService, StorageService
+from app.services.output_formatter import UnifiedOutputFormatter
 from app.services.task_queue import (
     PARSE_IMAGE_TASK,
     PARSE_PDF_TASK,
@@ -117,7 +118,19 @@ class ParserRouter:
         await db.commit()
         try:
             path = self.storage.resolve_path(file.stored_path)
-            parser.parse(str(path))
+            parser_result = parser.parse(str(path))
+            formatter = UnifiedOutputFormatter()
+            formatted = formatter.format_blocks(
+                parser_result.json_data.get("blocks", []),
+                identified_type,
+                parser_result.json_data.get("meta", {}),
+            )
+            await formatter.persist_parse_results(
+                db,
+                task.id,
+                file.id,
+                formatted,
+            )
             task.progress = 100
             task.status = FileStatus.COMPLETED.value
             task.completed_at = datetime.now(timezone.utc)
