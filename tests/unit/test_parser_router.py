@@ -17,7 +17,7 @@ from app.schemas.common import ErrorCode
 from app.services.parser_router import ParserRouter
 from app.services.storage import StorageService
 from app.services.task_queue import PARSE_IMAGE_TASK, PARSE_PDF_TASK
-from app.worker import parse_image_task, parse_pdf_task
+from app.worker import WorkerSettings, parse_image_task, parse_pdf_task
 
 
 class FakeResult:
@@ -191,6 +191,25 @@ async def test_async_image_creates_task_and_enqueues() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_enqueue_failure_marks_failed() -> None:
+    file = _make_file()
+    db = FakeDB(file)
+    router = ParserRouter(storage=FakeStorage())
+
+    with patch(
+        "app.services.parser_router.enqueue_job",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        with pytest.raises(AppException) as exc:
+            await router.route(db, file.id, "pdf", file.user_id)
+
+    assert exc.value.code == ErrorCode.PARSER_FAILED.value
+    task = db.added[0]
+    assert task.status == "failed"
+    assert file.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_unsupported_type_marks_file_failed() -> None:
     file = _make_file()
     db = FakeDB(file)
@@ -268,6 +287,42 @@ async def test_worker_retries_after_parser_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_success_marks_completed() -> None:
+    parser = StubParser(supported_types=["pdf"])
+    ParserRegistry.register(parser)
+    file = _make_file()
+    task = _make_task(file.id, file.user_id)
+    session = FakeWorkerSession(file, task)
+
+    with patch("app.worker.AsyncSessionLocal", return_value=session):
+        await parse_pdf_task({}, str(file.id))
+
+    assert task.status == "completed"
+    assert task.progress == 100
+    assert file.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_worker_reenqueue_failure_writes_error_details() -> None:
+    parser = StubParser(supported_types=["pdf"], fail=True)
+    ParserRegistry.register(parser)
+    file = _make_file()
+    task = _make_task(file.id, file.user_id)
+    session = FakeWorkerSession(file, task)
+
+    with patch("app.worker.AsyncSessionLocal", return_value=session), patch(
+        "app.worker.enqueue_job",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        await parse_pdf_task({}, str(file.id))
+
+    assert task.status == "failed"
+    assert file.status == "failed"
+    assert task.error_message.startswith("Failed to re-enqueue job:")
+    assert task.error_details == {"type": "RuntimeError"}
+
+
+@pytest.mark.asyncio
 async def test_worker_marks_failed_after_retry_limit() -> None:
     parser = StubParser(supported_types=["pdf"], fail=True)
     ParserRegistry.register(parser)
@@ -300,3 +355,12 @@ async def test_worker_image_parser_missing_marks_failed() -> None:
 
     assert task.status == "failed"
     assert file.status == "failed"
+
+
+def test_worker_redis_settings_derived_from_settings_url() -> None:
+    from urllib.parse import urlparse
+
+    from app.core.config import settings
+
+    expected_host = urlparse(settings.REDIS_URL).hostname or "redis"
+    assert WorkerSettings.redis_settings.host == expected_host

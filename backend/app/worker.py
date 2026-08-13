@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from arq.connections import RedisSettings
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models import File, ParseTask
 from app.parsers import ParserRegistry
@@ -14,6 +16,17 @@ from app.services.task_queue import (
 )
 
 storage = LocalStorageService()
+
+
+def _redis_settings_from_url() -> RedisSettings:
+    parsed = urlparse(settings.REDIS_URL)
+    database = int((parsed.path or "/0").lstrip("/") or 0)
+    return RedisSettings(
+        host=parsed.hostname or "redis",
+        port=parsed.port or 6379,
+        password=parsed.password,
+        database=database,
+    )
 
 
 async def startup(ctx):
@@ -77,9 +90,12 @@ async def _run_worker_task(ctx, file_id, parser_type, job_name):
                         file_id=str(file_id),
                         _defer_by=2 ** task.retry_count,
                     )
-                except Exception:
+                except Exception as exc:
                     task.status = "failed"
+                    task.error_message = f"Failed to re-enqueue job: {exc}"
+                    task.error_details = {"type": type(exc).__name__}
                     file.status = "failed"
+                    file.error_message = task.error_message
                     await db.commit()
             else:
                 task.status = "failed"
@@ -98,10 +114,7 @@ async def parse_image_task(ctx, file_id):
 class WorkerSettings:
     functions = [parse_pdf_task, parse_image_task]
 
-    redis_settings = RedisSettings(
-        host="redis",
-        port=6379,
-    )
+    redis_settings = _redis_settings_from_url()
 
     on_startup = startup
     on_shutdown = shutdown
