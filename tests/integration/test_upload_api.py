@@ -30,6 +30,7 @@ class FakeIdentifier:
         db: Any,
         file_id: uuid.UUID,
         path: Path,
+        uploaded_type: str | None = None,
     ) -> IdentificationResult:
         return IdentificationResult(
             file_id=file_id,

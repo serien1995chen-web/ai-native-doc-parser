@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app.models import File, FileIdentification
-from app.services.file_type_id import FileTypeIDService
+from app.services.file_type_id import OLE_MAGIC, FileTypeIDService
 
 
 class FakeResult:
@@ -51,11 +51,26 @@ def _make_db(file: File) -> AsyncMock:
 def test_layer1_extension_mapping() -> None:
     service = FileTypeIDService()
     assert service._layer1(Path("report.pdf")).identified_type == "pdf"
+    assert service._layer1(Path("legacy.doc")).identified_type == "doc"
+    assert service._layer1(Path("slides.ppt")).identified_type == "ppt"
+    assert service._layer1(Path("book.xls")).identified_type == "xls"
     assert service._layer1(Path("app.py")).identified_type == "code"
     assert service._layer1(Path("photo.png")).identified_type == "image"
     unknown = service._layer1(Path("archive.xyz"))
     assert unknown.identified_type == "unknown"
     assert unknown.confidence == 0.0
+
+
+def test_content_type_semantics_for_uploaded_type() -> None:
+    service = FileTypeIDService()
+    assert service._layer1(Path("notes.txt"), uploaded_type="file").content_type == "file"
+    assert service._layer1(Path("notes.md"), uploaded_type="file").content_type == "file"
+    assert (
+        service._layer1(Path("notes.txt"), uploaded_type="text").content_type
+        == "text_block"
+    )
+    assert service._layer1(Path("script.py"), uploaded_type="file").content_type == "code"
+    assert service._layer1(Path("script.py"), uploaded_type="text").content_type == "code"
 
 
 @pytest.mark.parametrize(
@@ -107,6 +122,52 @@ def test_layer2_zip_container_detection(
     result = FileTypeIDService()._layer2(path)
     assert result.identified_type == expected_type
     assert result.confidence == 0.92
+
+
+@pytest.mark.parametrize(
+    ("stream_name", "expected_type"),
+    [
+        ("WordDocument", "doc"),
+        ("PowerPoint Document", "ppt"),
+        ("Workbook", "xls"),
+    ],
+)
+def test_layer2_ole_magic_detection(
+    tmp_path: Path,
+    stream_name: str,
+    expected_type: str,
+) -> None:
+    path = tmp_path / "legacy.ole"
+    head = OLE_MAGIC + b"\x00" * 64 + stream_name.encode("utf-16-le")
+    path.write_bytes(head + b"\x00" * 128)
+    result = FileTypeIDService()._layer2(path)
+    assert result.identified_type == expected_type
+    assert result.confidence == 0.92
+    assert result.content_type == "file"
+
+
+def test_unknown_ole_magic_returns_unknown(tmp_path: Path) -> None:
+    path = tmp_path / "unknown.ole"
+    path.write_bytes(OLE_MAGIC + b"\x00" * 512)
+    result = FileTypeIDService()._layer2(path)
+    assert result.identified_type == "unknown"
+    assert result.confidence == 0.0
+
+
+@pytest.mark.asyncio
+async def test_unknown_ole_identify_returns_unknown(tmp_path: Path) -> None:
+    path = tmp_path / "unknown.ole"
+    path.write_bytes(OLE_MAGIC + b"\x00" * 512)
+    file = _make_file()
+    db = _make_db(file)
+    service = FileTypeIDService(
+        layer4_classifier=FakeClassifier("unknown", 0.2),
+    )
+
+    result = await service.identify(db, file.id, path)
+
+    assert result.identified_type == "UNKNOWN"
+    assert result.final_layer == 4
 
 
 @pytest.mark.parametrize(
