@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PADDLE_SERVER = REPO_ROOT / "gpu-paddle" / "inference_server.py"
+PADDLE_SERVER = REPO_ROOT / "gpu-paddle" / "engines" / "ocr.py"
 
 
 def _load_paddle_server() -> ModuleType:
