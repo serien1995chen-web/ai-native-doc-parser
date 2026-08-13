@@ -17,12 +17,24 @@ from engines.layout import (
     GPUUnavailableError,
     LayoutEngine,
 )
+from engines.formula import (
+    FormulaEngine,
+    GPUModelNotReadyError as FormulaModelNotReadyError,
+    GPUUnavailableError as FormulaUnavailableError,
+)
+from engines.table import (
+    TableEngine,
+    GPUModelNotReadyError as TableModelNotReadyError,
+    GPUUnavailableError as TableUnavailableError,
+)
 
 MODEL_BASE = Path(os.environ.get("MODEL_BASE", "/models"))
 
 app = FastAPI(title="GPU PyTorch Inference", version="1.0.0")
 
 _layout_engine = LayoutEngine()
+_table_engine = TableEngine()
+_formula_engine = FormulaEngine()
 
 
 class HealthResponse(BaseModel):
@@ -56,42 +68,25 @@ def _run_layout(image_path: Path) -> dict[str, Any]:
 
 def _run_table(image_path: Path) -> dict[str, Any]:
     try:
-        from PIL import Image
-        from transformers import AutoImageProcessor, TableTransformerForObjectDetection
-
-        model_dir = MODEL_BASE / "table-transformer-detection"
-        model_name = (
-            str(model_dir)
-            if model_dir.exists()
-            else "microsoft/table-transformer-detection"
-        )
-        processor = AutoImageProcessor.from_pretrained(model_name)
-        model = TableTransformerForObjectDetection.from_pretrained(model_name)
-
-        image_obj = Image.open(image_path).convert("RGB")
-        inputs = processor(images=image_obj, return_tensors="pt")
-        outputs = model(**inputs)
-        target_sizes = [image_obj.size[::-1]]
-        result = processor.post_process_object_detection(
-            outputs, threshold=0.9, target_sizes=target_sizes
-        )[0]
-        boxes = result["boxes"].tolist()
-        bbox = [float(value) for value in boxes[0]] if boxes else []
-        return {"rows": [], "bbox": bbox}
-    except HTTPException:
-        raise
-    except Exception as exc:
+        table = _table_engine.predict(image_path)
+        return {"rows": table["rows"], "bbox": table["bbox"]}
+    except (TableModelNotReadyError, TableUnavailableError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-def _run_formula(image_path: Path) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content={
-            "detail": "UniMERNet integration is not ready",
-            "code": "GPU_MODEL_NOT_READY",
-        },
-    )
+def _run_formula(image_path: Path) -> dict[str, Any] | JSONResponse:
+    try:
+        return _formula_engine.recognize(image_path)
+    except FormulaModelNotReadyError as exc:
+        return JSONResponse(
+            status_code=501,
+            content={
+                "detail": str(exc),
+                "code": "GPU_MODEL_NOT_READY",
+            },
+        )
+    except FormulaUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/health", response_model=HealthResponse)
