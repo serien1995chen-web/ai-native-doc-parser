@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from PIL import Image
 
@@ -14,6 +16,13 @@ from app.parsers.implementations.image_pipeline.gpu_client import GPUInferenceCl
 from app.parsers.registry import ParserRegistry
 
 SCHEMA_VERSION = "1.0"
+
+def _run_async(
+    awaitable_factory: Callable[[], Awaitable[list[dict[str, Any]]]],
+) -> list[dict[str, Any]]:
+    """Run an async pipeline call in a worker thread and block for the result."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, awaitable_factory()).result()
 
 
 def _sort_regions(regions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -230,7 +239,7 @@ class ImagePipelineParser(BaseParser):
             version="1.0.0",
         )
 
-    async def parse(
+    def parse(
         self,
         file_path: str,
         options: dict[str, Any] | None = None,
@@ -241,7 +250,7 @@ class ImagePipelineParser(BaseParser):
             raise FileNotFoundError(file_path)
         image_bytes = path.read_bytes()
         image_type = (options or {}).get("image_type", "image")
-        blocks = await self._pipeline.run(image_bytes, image_type=image_type)
+        blocks = _run_async(lambda: self._pipeline.run(image_bytes, image_type=image_type))
         processing_time_ms = round((perf_counter() - started) * 1000, 3)
         json_data = {
             "schema_version": SCHEMA_VERSION,

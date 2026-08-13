@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import importlib
 import importlib.util
+import inspect
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -180,8 +181,7 @@ async def test_image_pipeline_formula_and_table_types() -> None:
     ]
 
 
-@pytest.mark.asyncio
-async def test_image_pipeline_parser_output_schema(tmp_path: Path) -> None:
+def test_image_pipeline_parser_output_schema(tmp_path: Path) -> None:
     client = _fake_client(
         ocr={
             "gpu_unavailable": False,
@@ -193,7 +193,7 @@ async def test_image_pipeline_parser_output_schema(tmp_path: Path) -> None:
     parser = ImagePipelineParser(pipeline=pipeline)
     image_path = tmp_path / "sample.png"
     image_path.write_bytes(_make_png())
-    result = await parser.parse(str(image_path))
+    result = parser.parse(str(image_path))
     assert result.markdown == ""
     assert result.page_count == 1
     assert result.processing_time_ms is not None
@@ -278,3 +278,23 @@ def test_formula_engine_ready_returns_latex(tmp_path: Path) -> None:
     image_path = tmp_path / "formula.png"
     image_path.write_bytes(b"png")
     assert engine.recognize(image_path) == {"latex": "x^2"}
+
+
+@pytest.mark.asyncio
+async def test_image_pipeline_parser_parse_within_running_loop(
+    tmp_path: Path,
+) -> None:
+    client = _fake_client(
+        ocr={
+            "gpu_unavailable": False,
+            "data": {"items": []},
+            "error": None,
+        }
+    )
+    parser = ImagePipelineParser(pipeline=ImagePipeline(client=client))
+    image_path = tmp_path / "running-loop.png"
+    image_path.write_bytes(_make_png())
+    result = parser.parse(str(image_path))
+    assert not inspect.iscoroutine(result)
+    assert result.page_count == 1
+    assert result.json_data["file_type"] == "image"
