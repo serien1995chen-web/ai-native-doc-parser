@@ -54,6 +54,8 @@ async def _stored_result(
             ORMResult.task_id == task_id,
             ORMResult.output_format == output_format,
         )
+        .order_by(ORMResult.created_at.desc())
+        .limit(1)
     )
     record = result.scalar_one_or_none()
     if record is None:

@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.core.exceptions import AppException
 from app.models import File, ParseResult as ORMResult, ParseTask
@@ -64,8 +65,10 @@ class FakeDB:
         self.commits = 0
         self.rollbacks = 0
         self.fail_on_commit = fail_on_commit
+        self.executed: list[Any] = []
 
     async def execute(self, statement: Any) -> FakeResult:
+        self.executed.append(statement)
         return FakeResult([self.file] if self.file is not None else [])
 
     def add(self, obj: Any) -> None:
@@ -212,6 +215,33 @@ async def test_async_pdf_creates_task_and_enqueues() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rerun_task_clears_old_results_before_requeue() -> None:
+    file = _make_file()
+    task = _make_task(file.id, file.user_id)
+    task.status = "queued"
+    db = FakeDB(file)
+    router = ParserRouter(storage=FakeStorage())
+
+    with patch(
+        "app.services.parser_router.enqueue_job",
+        new=AsyncMock(),
+    ) as enqueue:
+        await router.rerun_task(db, task, file, "pdf")
+
+    enqueue.assert_awaited_once_with(PARSE_PDF_TASK, file_id=str(file.id))
+    statements = [
+        str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        for statement in db.executed
+    ]
+    assert any("DELETE FROM parse_results" in sql for sql in statements)
+
+
+@pytest.mark.asyncio
 async def test_async_image_creates_task_and_enqueues() -> None:
     file = _make_file()
     db = FakeDB(file)
@@ -337,6 +367,30 @@ async def test_worker_retries_after_parser_failure() -> None:
         PARSE_PDF_TASK,
         file_id=str(file.id),
         _defer_by=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_retry_after_manual_retry_increments_count() -> None:
+    parser = StubParser(supported_types=["pdf"], fail=True)
+    ParserRegistry.register(parser)
+    file = _make_file()
+    task = _make_task(file.id, file.user_id)
+    task.retry_count = 1
+    session = FakeWorkerSession(file, task)
+
+    with patch("app.worker.AsyncSessionLocal", return_value=session), patch(
+        "app.worker.enqueue_job",
+        new=AsyncMock(),
+    ) as enqueue:
+        await parse_pdf_task({}, str(file.id))
+
+    assert task.retry_count == 2
+    assert task.status == "queued"
+    enqueue.assert_awaited_once_with(
+        PARSE_PDF_TASK,
+        file_id=str(file.id),
+        _defer_by=4,
     )
 
 

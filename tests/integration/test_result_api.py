@@ -8,9 +8,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.dialects import postgresql
 
 from app.api.deps import get_current_user_id, get_db
-from app.api.v1.results import get_pandoc_converter
+from app.api.v1.results import _stored_result, get_pandoc_converter
+from app.core.exceptions import AppException
 from app.main import create_app
 from app.models import ParseResult as ORMResult
 from app.models import ParseTask
@@ -172,3 +174,22 @@ async def test_download_html_uses_converter() -> None:
         response.headers["content-disposition"]
         == 'attachment; filename="result.html"'
     )
+
+
+@pytest.mark.asyncio
+async def test_stored_result_orders_by_latest_and_limits() -> None:
+    db = AsyncMock()
+    db.execute.return_value = FakeResult([])
+
+    with pytest.raises(AppException):
+        await _stored_result(db, uuid.uuid4(), "markdown")
+
+    statement = db.execute.call_args.args[0]
+    compiled = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "ORDER BY parse_results.created_at DESC" in compiled
+    assert "LIMIT 1" in compiled

@@ -40,11 +40,13 @@ class FakeTaskService:
         task: TaskResponse,
         list_result: PaginatedResponse[TaskResponse] | None = None,
         fail_not_found: bool = False,
+        fail_retry: bool = False,
         fail_cancel: bool = False,
     ) -> None:
         self.task = task
         self.list_result = list_result
         self.fail_not_found = fail_not_found
+        self.fail_retry = fail_retry
         self.fail_cancel = fail_cancel
         self.retry_called = False
         self.cancel_called = False
@@ -74,6 +76,11 @@ class FakeTaskService:
         task_id: uuid.UUID,
     ) -> TaskResponse:
         self.retry_called = True
+        if self.fail_retry:
+            raise AppException(
+                ErrorCode.TASK_STATE_CONFLICT,
+                "Only failed tasks can be retried",
+            )
         return self.task
 
     async def cancel_task(
@@ -85,7 +92,7 @@ class FakeTaskService:
         self.cancel_called = True
         if self.fail_cancel:
             raise AppException(
-                ErrorCode.PARSER_FAILED,
+                ErrorCode.TASK_STATE_CONFLICT,
                 "Only queued tasks can be cancelled",
             )
         return self.task
@@ -201,7 +208,20 @@ async def test_get_task_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_non_queued_task_returns_parser_failed() -> None:
+async def test_retry_non_failed_task_returns_409() -> None:
+    task = _task(status=TaskStatus.COMPLETED)
+    service = FakeTaskService(task, fail_retry=True)
+    app, _ = _override_app(service, uuid.uuid4())
+
+    async with await _client(app) as client:
+        response = await client.post(f"/api/v1/tasks/{task.id}/retry")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "TASK_STATE_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_cancel_non_queued_task_returns_409() -> None:
     task = _task(status=TaskStatus.PROCESSING)
     service = FakeTaskService(task, fail_cancel=True)
     app, _ = _override_app(service, uuid.uuid4())
@@ -209,5 +229,5 @@ async def test_cancel_non_queued_task_returns_parser_failed() -> None:
     async with await _client(app) as client:
         response = await client.post(f"/api/v1/tasks/{task.id}/cancel")
 
-    assert response.status_code == 500
-    assert response.json()["error"]["code"] == "PARSER_FAILED"
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "TASK_STATE_CONFLICT"

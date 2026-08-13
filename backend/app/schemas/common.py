@@ -50,6 +50,7 @@ class ErrorCode(str, Enum):
     PARSER_FAILED = "PARSER_FAILED"
     GPU_UNAVAILABLE = "GPU_UNAVAILABLE"
     TASK_CANCELLED = "TASK_CANCELLED"
+    TASK_STATE_CONFLICT = "TASK_STATE_CONFLICT"
     FILE_DUPLICATE = "FILE_DUPLICATE"
     UNAUTHORIZED = "UNAUTHORIZED"
     FORBIDDEN = "FORBIDDEN"
@@ -66,6 +67,7 @@ class ErrorCode(str, Enum):
             ErrorCode.PARSER_FAILED: 500,
             ErrorCode.GPU_UNAVAILABLE: 503,
             ErrorCode.TASK_CANCELLED: 200,
+            ErrorCode.TASK_STATE_CONFLICT: 409,
             ErrorCode.FILE_DUPLICATE: 409,
             ErrorCode.UNAUTHORIZED: 401,
             ErrorCode.FORBIDDEN: 403,

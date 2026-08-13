@@ -9,7 +9,12 @@ from sqlalchemy import func, select
 
 from app.core.exceptions import AppException
 from app.models import File, ParseTask
-from app.schemas.common import ErrorCode, PaginatedResponse, TaskStatus
+from app.schemas.common import (
+    ErrorCode,
+    FileStatus,
+    PaginatedResponse,
+    TaskStatus,
+)
 from app.schemas.task import TaskListParams, TaskResponse
 from app.services.parser_router import ParserRouter
 from app.services.storage import LocalStorageService
@@ -104,16 +109,26 @@ class TaskService:
         user_id: uuid.UUID,
         task_id: uuid.UUID,
     ) -> TaskResponse:
-        """Retry a failed task through its original parser path."""
-        task = await self._load_owned_task(db, user_id, task_id)
+        """Retry a failed task through its original parser path.
+
+        retry_count is the total retry count shared by manual retries and
+        worker automatic retries. A manual retry increments it once before
+        rerunning; a later worker failure increments it again.
+        """
+        task = await self._load_owned_task(
+            db,
+            user_id,
+            task_id,
+            for_update=True,
+        )
         if task.status != TaskStatus.FAILED.value:
             raise AppException(
-                ErrorCode.PARSER_FAILED,
+                ErrorCode.TASK_STATE_CONFLICT,
                 "Only failed tasks can be retried",
             )
         if (task.retry_count or 0) >= MAX_RETRY_COUNT:
             raise AppException(
-                ErrorCode.PARSER_FAILED,
+                ErrorCode.TASK_STATE_CONFLICT,
                 "Task retry limit reached",
             )
 
@@ -141,13 +156,21 @@ class TaskService:
         task_id: uuid.UUID,
     ) -> TaskResponse:
         """Cancel a queued task."""
-        task = await self._load_owned_task(db, user_id, task_id)
+        task = await self._load_owned_task(
+            db,
+            user_id,
+            task_id,
+            for_update=True,
+        )
         if task.status != TaskStatus.QUEUED.value:
             raise AppException(
-                ErrorCode.PARSER_FAILED,
+                ErrorCode.TASK_STATE_CONFLICT,
                 "Only queued tasks can be cancelled",
             )
+        file = await self._load_file(db, task.file_id)
         task.status = TaskStatus.CANCELLED.value
+        file.status = FileStatus.FAILED.value
+        file.error_message = "Task cancelled"
         await db.commit()
         return _task_to_response(task)
 
@@ -156,13 +179,15 @@ class TaskService:
         db: Any,
         user_id: uuid.UUID,
         task_id: uuid.UUID,
+        for_update: bool = False,
     ) -> ParseTask:
-        result = await db.execute(
-            select(ParseTask).where(
-                ParseTask.id == task_id,
-                ParseTask.user_id == user_id,
-            )
+        statement = select(ParseTask).where(
+            ParseTask.id == task_id,
+            ParseTask.user_id == user_id,
         )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await db.execute(statement)
         task = result.scalar_one_or_none()
         if task is None:
             raise AppException(ErrorCode.FILE_NOT_FOUND, "Task not found")

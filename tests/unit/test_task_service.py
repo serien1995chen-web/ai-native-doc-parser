@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.core.exceptions import AppException
 from app.models import File, ParseTask
@@ -50,6 +52,47 @@ class FakeParserRouter:
         identified_type: str,
     ) -> None:
         self.rerun_calls.append((task, file, identified_type))
+
+
+class LockingFakeDB:
+    """Fake async session that serializes FOR UPDATE task reads."""
+
+    def __init__(self, task: ParseTask, file: File) -> None:
+        self.task = task
+        self.file = file
+        self.locked = False
+        self.release_event = asyncio.Event()
+        self.commits = 0
+
+    async def execute(self, statement: Any) -> FakeResult:
+        sql = str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        if "FOR UPDATE" in sql:
+            if self.locked:
+                await self.release_event.wait()
+            self.locked = True
+        if "FROM parse_tasks" in sql:
+            return FakeResult([self.task])
+        if "FROM files" in sql:
+            return FakeResult([self.file])
+        return FakeResult([])
+
+    async def commit(self) -> None:
+        self.commits += 1
+        if self.locked:
+            self.locked = False
+            self.release_event.set()
+            self.release_event = asyncio.Event()
+
+    async def rollback(self) -> None:
+        if self.locked:
+            self.locked = False
+            self.release_event.set()
+            self.release_event = asyncio.Event()
 
 
 def _make_file() -> File:
@@ -130,7 +173,7 @@ async def test_retry_task_rejects_non_failed() -> None:
     with pytest.raises(AppException) as exc:
         await service.retry_task(db, task.user_id, task.id)
 
-    assert exc.value.code == ErrorCode.PARSER_FAILED.value
+    assert exc.value.code == ErrorCode.TASK_STATE_CONFLICT.value
 
 
 @pytest.mark.asyncio
@@ -142,7 +185,7 @@ async def test_retry_task_rejects_retry_limit() -> None:
     with pytest.raises(AppException) as exc:
         await service.retry_task(db, task.user_id, task.id)
 
-    assert exc.value.code == ErrorCode.PARSER_FAILED.value
+    assert exc.value.code == ErrorCode.TASK_STATE_CONFLICT.value
 
 
 @pytest.mark.asyncio
@@ -186,12 +229,15 @@ async def test_retry_task_async_requeues_existing_task() -> None:
 @pytest.mark.asyncio
 async def test_cancel_task_queued_succeeds() -> None:
     task = _make_task(status="queued")
-    db = _db(FakeResult([task]))
+    file = _make_file()
+    db = _db(FakeResult([task]), FakeResult([file]))
     service = _service()
 
     response = await service.cancel_task(db, task.user_id, task.id)
 
     assert task.status == TaskStatus.CANCELLED.value
+    assert file.status == "failed"
+    assert file.error_message == "Task cancelled"
     assert response.status == TaskStatus.CANCELLED
 
 
@@ -204,4 +250,91 @@ async def test_cancel_task_rejects_non_queued() -> None:
     with pytest.raises(AppException) as exc:
         await service.cancel_task(db, task.user_id, task.id)
 
-    assert exc.value.code == ErrorCode.PARSER_FAILED.value
+    assert exc.value.code == ErrorCode.TASK_STATE_CONFLICT.value
+
+
+@pytest.mark.asyncio
+async def test_retry_task_uses_row_lock() -> None:
+    task = _make_task()
+    file = _make_file()
+    db = _db(FakeResult([task]), FakeResult([file]))
+    service = _service()
+
+    await service.retry_task(db, task.user_id, task.id)
+
+    statement = db.execute.call_args_list[0].args[0]
+    compiled = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "FOR UPDATE" in compiled
+
+
+@pytest.mark.asyncio
+async def test_concurrent_retry_only_one_succeeds() -> None:
+    task = _make_task(parser_type="txt", retry_count=0)
+    file = _make_file()
+    db = LockingFakeDB(task, file)
+    service = _service()
+
+    results = await asyncio.gather(
+        service.retry_task(db, task.user_id, task.id),
+        service.retry_task(db, task.user_id, task.id),
+        return_exceptions=True,
+    )
+
+    succeeded = [result for result in results if not isinstance(result, BaseException)]
+    conflicts = [
+        result
+        for result in results
+        if isinstance(result, AppException)
+        and result.code == ErrorCode.TASK_STATE_CONFLICT.value
+    ]
+    assert len(succeeded) == 1
+    assert len(conflicts) == 1
+    assert task.retry_count == 1
+    assert task.status == TaskStatus.QUEUED.value
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_retry_race_only_cancel_succeeds() -> None:
+    task = _make_task(status="queued")
+    file = _make_file()
+    db = _db(FakeResult([task]), FakeResult([file]), FakeResult([task]))
+    service = _service()
+
+    results = await asyncio.gather(
+        service.cancel_task(db, task.user_id, task.id),
+        service.retry_task(db, task.user_id, task.id),
+        return_exceptions=True,
+    )
+
+    successes = [result for result in results if not isinstance(result, BaseException)]
+    conflicts = [
+        result
+        for result in results
+        if isinstance(result, AppException)
+        and result.code == ErrorCode.TASK_STATE_CONFLICT.value
+    ]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+    assert task.status == TaskStatus.CANCELLED.value
+    assert file.status == "failed"
+    assert file.error_message == "Task cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_task_updates_file_status() -> None:
+    task = _make_task(status="queued")
+    file = _make_file()
+    db = _db(FakeResult([task]), FakeResult([file]))
+    service = _service()
+
+    response = await service.cancel_task(db, task.user_id, task.id)
+
+    assert task.status == TaskStatus.CANCELLED.value
+    assert file.status == "failed"
+    assert file.error_message == "Task cancelled"
+    assert response.status == TaskStatus.CANCELLED

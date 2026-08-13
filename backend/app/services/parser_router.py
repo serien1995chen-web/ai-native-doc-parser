@@ -7,9 +7,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy import delete
 
 from app.core.exceptions import AppException
-from app.models import File, ParseTask
+from app.models import File, ParseResult, ParseTask
 from app.parsers import ParserRegistry
 from app.schemas.common import ErrorCode, FileStatus
 from app.services.storage import LocalStorageService, StorageService
@@ -96,6 +97,10 @@ class ParserRouter:
         identified_type: str,
     ) -> None:
         """Re-run a failed task through its original parser path."""
+        await db.execute(
+            delete(ParseResult).where(ParseResult.task_id == task.id)
+        )
+        await db.commit()
         if identified_type == "pdf":
             await self._enqueue_async(
                 db,
