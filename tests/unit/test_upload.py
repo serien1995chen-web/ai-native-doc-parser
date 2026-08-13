@@ -6,6 +6,7 @@ import base64
 import hashlib
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
@@ -19,6 +20,7 @@ from app.core.exceptions import AppException
 from app.models import File, User
 from app.schemas.common import ErrorCode, FileStatus
 from app.schemas.file import FileListParams
+from app.schemas.identification import IdentificationResult
 from app.services.storage import StorageService
 from app.services.upload import UploadService
 
@@ -49,6 +51,9 @@ class FakeStorage(StorageService):
     async def read_bytes(self, relative_path: str) -> bytes:
         return self.data[relative_path]
 
+    def resolve_path(self, relative_path: str) -> Path:
+        return Path(relative_path)
+
 
 class FailingStorage(FakeStorage):
     """Storage that fails on writes."""
@@ -58,6 +63,34 @@ class FailingStorage(FakeStorage):
 
     async def save_text(self, relative_path: str, content: str) -> None:
         raise OSError("disk full")
+
+
+class FakeIdentifier:
+    """Stand-in FileTypeIDService used by upload unit tests."""
+
+    def __init__(
+        self,
+        identified_type: str = "txt",
+        content_type: str | None = "text_block",
+        confidence: float = 0.85,
+        final_layer: int = 3,
+    ) -> None:
+        self.calls: list[tuple[uuid.UUID, Path]] = []
+        self.identified_type = identified_type
+        self.content_type = content_type
+        self.confidence = confidence
+        self.final_layer = final_layer
+
+    async def identify(self, db: Any, file_id: uuid.UUID, path: Path) -> IdentificationResult:
+        self.calls.append((file_id, Path(path)))
+        return IdentificationResult(
+            file_id=file_id,
+            identified_type=self.identified_type,
+            content_type=self.content_type,
+            identified_confidence=self.confidence,
+            final_layer=self.final_layer,
+            is_final=True,
+        )
 
 
 class FakeResult:
@@ -112,9 +145,17 @@ def _make_user(**overrides: Any) -> User:
     return User(**values)
 
 
-def _service(db: AsyncMock, storage: FakeStorage | None = None) -> tuple[UploadService, FakeStorage]:
+def _service(
+    db: AsyncMock,
+    storage: FakeStorage | None = None,
+    identifier: FakeIdentifier | None = None,
+) -> tuple[UploadService, FakeStorage]:
     fake_storage = storage or FakeStorage()
-    return UploadService(fake_storage), fake_storage
+    service = UploadService(
+        fake_storage,
+        file_type_id_service=identifier or FakeIdentifier(),
+    )
+    return service, fake_storage
 
 
 @pytest.mark.asyncio
@@ -129,8 +170,9 @@ async def test_upload_file_success() -> None:
     assert response.original_name == "hello.txt"
     assert response.status == FileStatus.UPLOADED
     assert len(storage.data) == 1
-    db.add.assert_called_once()
-    db.commit.assert_awaited_once()
+    record = db.add.call_args.args[0]
+    assert record.status == "parsing"
+    assert db.commit.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -192,6 +234,8 @@ async def test_upload_screenshot_success() -> None:
 
     assert response.original_name == "screenshot.png"
     assert list(storage.data.values())[0] == png_data
+    assert db.add.call_args.args[0].status == "parsing"
+    assert db.commit.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -298,6 +342,8 @@ async def test_upload_text_success() -> None:
     record = db.add.call_args.args[0]
     assert record.source_content == "print('hi')"
     assert record.file_hash == hashlib.sha256(b"print('hi')").hexdigest()
+    assert record.status == "parsing"
+    assert db.commit.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -348,6 +394,41 @@ async def test_upload_text_sets_content_type() -> None:
     added = db.add.call_args_list
     assert added[0].args[0].content_type == "text_block"
     assert added[1].args[0].content_type == "code"
+
+
+@pytest.mark.asyncio
+async def test_upload_calls_identification_service() -> None:
+    db = _make_db()
+    db.execute.return_value = FakeResult([])
+    identifier = FakeIdentifier()
+    service, _ = _service(db, identifier=identifier)
+
+    await service.upload_file(db, uuid.uuid4(), "a.txt", "text/plain", b"hello")
+
+    assert len(identifier.calls) == 1
+    file_id, path = identifier.calls[0]
+    assert isinstance(file_id, uuid.UUID)
+    assert isinstance(path, Path)
+    assert db.add.call_args.args[0].status == "parsing"
+
+
+@pytest.mark.asyncio
+async def test_upload_unknown_identification_sets_failed() -> None:
+    db = _make_db()
+    db.execute.return_value = FakeResult([])
+    identifier = FakeIdentifier(
+        identified_type="UNKNOWN",
+        content_type=None,
+        confidence=0.2,
+        final_layer=4,
+    )
+    service, _ = _service(db, identifier=identifier)
+
+    await service.upload_file(db, uuid.uuid4(), "a.bin", None, b"\x00\x01")
+
+    record = db.add.call_args.args[0]
+    assert record.status == "failed"
+    assert record.error_message == "File type could not be identified"
 
 
 @pytest.mark.asyncio

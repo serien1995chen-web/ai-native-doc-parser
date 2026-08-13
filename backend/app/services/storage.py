@@ -29,6 +29,10 @@ class StorageService(ABC):
     async def read_bytes(self, relative_path: str) -> bytes:
         """Read raw bytes from a relative path."""
 
+    @abstractmethod
+    def resolve_path(self, relative_path: str) -> Path:
+        """Return the absolute path for a stored relative path."""
+
 
 class LocalStorageService(StorageService):
     """Filesystem-backed storage rooted at settings.UPLOAD_DIR."""
@@ -69,3 +73,6 @@ class LocalStorageService(StorageService):
         path = self._resolve(relative_path)
         async with aiofiles.open(path, "rb") as handle:
             return await handle.read()
+
+    def resolve_path(self, relative_path: str) -> Path:
+        return self._resolve(relative_path)

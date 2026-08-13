@@ -19,6 +19,7 @@ from app.core.exceptions import AppException
 from app.models import File
 from app.schemas.common import ErrorCode, FileStatus, PaginatedResponse
 from app.schemas.file import FileListParams, FileResponse, FileUploadResponse
+from app.services.file_type_id import FileTypeIDService
 from app.services.storage import StorageService
 
 
@@ -44,6 +45,8 @@ def _file_to_response(file: File) -> FileResponse:
         file_size=file.file_size,
         status=FileStatus(file.status),
         mime_type=file.mime_type,
+        identified_type=file.identified_type,
+        identified_confidence=file.identified_confidence,
         created_at=file.created_at,
         updated_at=file.updated_at,
     )
@@ -52,8 +55,37 @@ def _file_to_response(file: File) -> FileResponse:
 class UploadService:
     """High-level upload, listing, and deletion operations."""
 
-    def __init__(self, storage: StorageService) -> None:
+    def __init__(
+        self,
+        storage: StorageService,
+        file_type_id_service: FileTypeIDService | None = None,
+    ) -> None:
         self.storage = storage
+        self.file_type_id_service = file_type_id_service or FileTypeIDService()
+
+    async def _run_identification(self, db: Any, record: File) -> None:
+        absolute_path = self.storage.resolve_path(record.stored_path)
+        record.status = FileStatus.IDENTIFYING.value
+        await db.commit()
+        try:
+            result = await self.file_type_id_service.identify(
+                db,
+                record.id,
+                absolute_path,
+            )
+            if result.identified_type == "UNKNOWN":
+                record.status = FileStatus.FAILED.value
+                record.error_message = "File type could not be identified"
+            else:
+                record.status = FileStatus.PARSING.value
+            await db.commit()
+        except Exception:
+            record.status = FileStatus.FAILED.value
+            record.error_message = "File type identification failed"
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
 
     async def _check_duplicate(self, db: Any, data: bytes) -> str:
         """Compute SHA-256 and reject content already stored globally."""
@@ -121,6 +153,7 @@ class UploadService:
         except Exception:
             await db.rollback()
             raise
+        await self._run_identification(db, record)
         return FileUploadResponse(
             file_id=file_id,
             original_name=safe_name,
@@ -231,6 +264,7 @@ class UploadService:
         except Exception:
             await db.rollback()
             raise
+        await self._run_identification(db, record)
         return FileUploadResponse(
             file_id=file_id,
             original_name=safe_name,
