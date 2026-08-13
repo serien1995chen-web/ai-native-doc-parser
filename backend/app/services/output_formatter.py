@@ -45,7 +45,9 @@ class UnifiedOutputFormatter:
                 caption = str(block.get("caption", ""))
                 parts.append(f"![{caption}]({src})")
             elif block_type == "formula":
-                formula_text = str(block.get("text", "")).replace("$$", "\\$\\$")
+                formula_text = str(
+                    block.get("latex", block.get("text", ""))
+                ).replace("$$", "\\$\\$")
                 parts.append(f"$${formula_text}$$")
             elif block_type == "code":
                 language = str(block.get("language", ""))
@@ -78,11 +80,12 @@ class UnifiedOutputFormatter:
         blocks: list[dict[str, Any]],
         file_type: str,
         meta: dict[str, Any] | None = None,
+        page_count: int | None = None,
     ) -> ParserParseResult:
         json_data: dict[str, Any] = {
             "schema_version": "1.0",
             "file_type": file_type,
-            "page_count": None,
+            "page_count": page_count,
             "blocks": blocks,
             "meta": meta or {},
         }

@@ -124,6 +124,7 @@ class ParserRouter:
                 parser_result.json_data.get("blocks", []),
                 identified_type,
                 parser_result.json_data.get("meta", {}),
+                page_count=parser_result.page_count,
             )
             await formatter.persist_parse_results(
                 db,
@@ -137,6 +138,7 @@ class ParserRouter:
             file.status = FileStatus.COMPLETED.value
             await db.commit()
         except Exception as exc:
+            await db.rollback()
             task.status = FileStatus.FAILED.value
             task.error_message = str(exc)
             task.error_details = {"type": type(exc).__name__}

@@ -89,6 +89,22 @@ def test_formula_with_dollar_signs_escaped() -> None:
     assert "$$a \\$\\$ b$$" in markdown
 
 
+def test_formula_latex_field_is_used() -> None:
+    blocks = [{"type": "formula", "latex": "x^2"}]
+    markdown = UnifiedOutputFormatter.to_markdown(_parse_result(blocks))
+    assert "$$x^2$$" in markdown
+
+
+def test_format_blocks_preserves_page_count() -> None:
+    result = UnifiedOutputFormatter.format_blocks(
+        [],
+        "pdf",
+        {"parser": "pdf"},
+        page_count=12,
+    )
+    assert result.json_data["page_count"] == 12
+
+
 @pytest.mark.asyncio
 async def test_persist_writes_markdown_and_json() -> None:
     db = FakeDB()
