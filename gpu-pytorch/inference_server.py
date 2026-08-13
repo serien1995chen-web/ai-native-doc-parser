@@ -12,9 +12,17 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from engines.layout import (
+    GPUModelNotReadyError,
+    GPUUnavailableError,
+    LayoutEngine,
+)
+
 MODEL_BASE = Path(os.environ.get("MODEL_BASE", "/models"))
 
 app = FastAPI(title="GPU PyTorch Inference", version="1.0.0")
+
+_layout_engine = LayoutEngine()
 
 
 class HealthResponse(BaseModel):
@@ -38,46 +46,11 @@ def _save_upload(upload: UploadFile, name: str) -> Path:
     return _save_bytes(upload.file.read(), name)
 
 
-def _layout_model_path() -> Path:
-    candidates = sorted((MODEL_BASE / "doclayout_yolo").glob("*.pt"))
-    if not candidates:
-        raise HTTPException(
-            status_code=503,
-            detail="doclayout_yolo model not found under /models/doclayout_yolo",
-        )
-    return candidates[0]
-
-
 def _run_layout(image_path: Path) -> dict[str, Any]:
     try:
-        from doclayout_yolo import YOLOv10
-
-        model = YOLOv10(str(_layout_model_path()))
-        results = model.predict(str(image_path), imgsz=1024, conf=0.2, device="cuda:0")
-        boxes = results[0].boxes
-        class_names = results[0].names
-        detections = []
-        for row in boxes.data.cpu().numpy().tolist():
-            x0, y0, x1, y1, confidence, class_id = row
-            class_name = str(class_id)
-            if isinstance(class_names, dict):
-                class_name = str(class_names.get(int(class_id), class_name))
-            else:
-                try:
-                    class_name = str(class_names[int(class_id)])
-                except Exception:
-                    class_name = str(class_id)
-            detections.append(
-                {
-                    "class": class_name,
-                    "bbox": [float(x0), float(y0), float(x1), float(y1)],
-                    "confidence": float(confidence),
-                }
-            )
+        detections = _layout_engine.detect(image_path)
         return {"detections": detections}
-    except HTTPException:
-        raise
-    except Exception as exc:
+    except (GPUModelNotReadyError, GPUUnavailableError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
@@ -156,7 +129,7 @@ async def formula(file: UploadFile = File(...)) -> JSONResponse:
     return _run_formula(image)
 
 
-@app.post("/infer")
+@app.post("/infer", response_model=None)
 async def infer(request: InferRequest) -> dict[str, Any] | JSONResponse:
     try:
         image_bytes = base64.b64decode(request.image_base64, validate=True)
