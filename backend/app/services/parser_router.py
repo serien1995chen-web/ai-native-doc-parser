@@ -6,12 +6,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 
 from app.core.exceptions import AppException
-from app.models import File, ParseTask
+from app.models import File, ParseResult, ParseTask
 from app.parsers import ParserRegistry
-from app.schemas.common import ErrorCode, FileStatus
+from app.schemas.common import ErrorCode, FileStatus, TaskStatus
 from app.services.storage import LocalStorageService, StorageService
 from app.services.output_formatter import UnifiedOutputFormatter
 from app.services.task_queue import (
@@ -88,12 +88,92 @@ class ParserRouter:
         await db.commit()
         raise AppException(ErrorCode.UNSUPPORTED_FORMAT, "Unsupported file type")
 
+    async def rerun_task(
+        self,
+        db: Any,
+        task: ParseTask,
+        file: File,
+        identified_type: str,
+    ) -> None:
+        """Re-run a failed task through its original parser path.
+
+        The queued -> processing claim is conditional so a cancel that wins
+        the race after retry_task commits queued aborts the rerun.
+        """
+        claim = await db.execute(
+            update(ParseTask)
+            .where(
+                ParseTask.id == task.id,
+                ParseTask.status == TaskStatus.QUEUED.value,
+            )
+            .values(status=TaskStatus.PROCESSING.value)
+        )
+        if claim.rowcount == 0:
+            await db.rollback()
+            raise AppException(
+                ErrorCode.TASK_STATE_CONFLICT,
+                "Task state changed during retry",
+            )
+        task.status = TaskStatus.PROCESSING.value
+        await db.execute(
+            delete(ParseResult).where(ParseResult.task_id == task.id)
+        )
+        if identified_type == "pdf":
+            await self._requeue_retry(db, task, file, PARSE_PDF_TASK)
+            return
+        if identified_type.startswith("image"):
+            await self._requeue_retry(db, task, file, PARSE_IMAGE_TASK)
+            return
+        if identified_type in SYNC_TYPES:
+            await self._run_sync(
+                db,
+                file,
+                task.user_id,
+                identified_type,
+                task=task,
+            )
+            return
+
+        await db.rollback()
+        task.status = FileStatus.FAILED.value
+        task.error_message = f"Unsupported file type: {identified_type}"
+        file.status = FileStatus.FAILED.value
+        file.error_message = task.error_message
+        await db.commit()
+        raise AppException(ErrorCode.UNSUPPORTED_FORMAT, "Unsupported file type")
+
+    async def _requeue_retry(
+        self,
+        db: Any,
+        task: ParseTask,
+        file: File,
+        job_name: str,
+    ) -> None:
+        """Re-enqueue a retried task and commit the cleanup atomically."""
+        try:
+            await enqueue_job(job_name, file_id=str(file.id))
+        except Exception as exc:
+            await db.rollback()
+            task.status = FileStatus.FAILED.value
+            task.error_message = f"Failed to enqueue job: {exc}"
+            task.error_details = {"type": type(exc).__name__}
+            file.status = FileStatus.FAILED.value
+            file.error_message = task.error_message
+            await db.commit()
+            raise AppException(
+                ErrorCode.PARSER_FAILED,
+                "Failed to enqueue job",
+                str(exc),
+            ) from exc
+        await db.commit()
+
     async def _run_sync(
         self,
         db: Any,
         file: File,
         user_id: uuid.UUID,
         identified_type: str,
+        task: ParseTask | None = None,
     ) -> None:
         parser = ParserRegistry.get_parser(identified_type)
         if parser is None:
@@ -102,20 +182,20 @@ class ParserRouter:
             await db.commit()
             raise AppException(ErrorCode.UNSUPPORTED_FORMAT, "Unsupported file type")
 
-        task = ParseTask(
-            id=uuid.uuid4(),
-            file_id=file.id,
-            user_id=user_id,
-            parser_type=identified_type,
-            status="queued",
-            progress=0,
-        )
-        db.add(task)
-        await db.commit()
+        if task is None:
+            task = ParseTask(
+                id=uuid.uuid4(),
+                file_id=file.id,
+                user_id=user_id,
+                parser_type=identified_type,
+                status="queued",
+                progress=0,
+            )
+            db.add(task)
+            await db.commit()
 
         task.status = "processing"
         task.started_at = datetime.now(timezone.utc)
-        await db.commit()
         try:
             path = self.storage.resolve_path(file.stored_path)
             parser_result = parser.parse(str(path))
@@ -158,17 +238,19 @@ class ParserRouter:
         user_id: uuid.UUID,
         parser_type: str,
         job_name: str,
+        task: ParseTask | None = None,
     ) -> None:
-        task = ParseTask(
-            id=uuid.uuid4(),
-            file_id=file.id,
-            user_id=user_id,
-            parser_type=parser_type,
-            status="queued",
-            progress=0,
-        )
-        db.add(task)
-        await db.commit()
+        if task is None:
+            task = ParseTask(
+                id=uuid.uuid4(),
+                file_id=file.id,
+                user_id=user_id,
+                parser_type=parser_type,
+                status="queued",
+                progress=0,
+            )
+            db.add(task)
+            await db.commit()
         try:
             await enqueue_job(job_name, file_id=str(file.id))
         except Exception as exc:

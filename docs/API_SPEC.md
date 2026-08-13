@@ -130,6 +130,7 @@ Response 200:
 | PARSER_FAILED      | 500       | 解析器内部错误   | 解析器运行时抛出未预期的异常                   |
 | GPU_UNAVAILABLE    | 503       | GPU 模型不可用   | GPU 容器未启动或显存耗尽                      |
 | TASK_CANCELLED     | 200       | 任务被取消       | 用户主动取消了排队中的任务                     |
+| TASK_STATE_CONFLICT| 409       | 任务状态冲突     | 任务状态不允许重试或取消                       |
 | FILE_DUPLICATE     | 409       | 文件重复         | 上传了已存在的文件（SHA-256 匹配）             |
 | UNAUTHORIZED       | 401       | 未认证           | 请求未携带有效的 JWT 或 API Key               |
 | FORBIDDEN          | 403       | 无权限           | 请求的资源不属于当前用户                       |

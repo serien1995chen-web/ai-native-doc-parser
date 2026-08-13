@@ -92,6 +92,8 @@ async def _run_worker_task(ctx, file_id, parser_type, job_name):
             file.status = "completed"
             await db.commit()
         except Exception as exc:
+            # retry_count is shared with manual retries; this is the worker's
+            # automatic retry increment after a manual retry fails again.
             retry_count = (task.retry_count or 0) + 1
             await db.rollback()
             task.retry_count = retry_count
