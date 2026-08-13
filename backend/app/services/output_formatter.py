@@ -26,10 +26,14 @@ class UnifiedOutputFormatter:
                 parts.append(str(block.get("text", "")))
             elif block_type == "table":
                 rows = block.get("rows", [])
-                if rows:
-                    header = rows[0]
-                    separator = ["---"] * len(header)
-                    table_rows = [header, separator, *rows[1:]]
+                if rows and rows[0]:
+                    width = len(rows[0])
+                    padded_rows = [
+                        (list(row) + [""] * width)[:width]
+                        for row in rows
+                    ]
+                    separator = ["---"] * width
+                    table_rows = [padded_rows[0], separator, *padded_rows[1:]]
                     parts.append(
                         "\n".join(
                             "| " + " | ".join(str(cell) for cell in row) + " |"
@@ -41,11 +45,21 @@ class UnifiedOutputFormatter:
                 caption = str(block.get("caption", ""))
                 parts.append(f"![{caption}]({src})")
             elif block_type == "formula":
-                parts.append(f"$${block.get('text', '')}$$")
+                formula_text = str(block.get("text", "")).replace("$$", "\\$\\$")
+                parts.append(f"$${formula_text}$$")
             elif block_type == "code":
                 language = str(block.get("language", ""))
                 text = str(block.get("text", ""))
-                parts.append(f"```{language}\n{text}\n```")
+                max_run = 0
+                current_run = 0
+                for char in text:
+                    if char == "`":
+                        current_run += 1
+                        max_run = max(max_run, current_run)
+                    else:
+                        current_run = 0
+                fence = "`" * max(3, max_run + 1)
+                parts.append(f"{fence}{language}\n{text}\n{fence}")
             else:
                 parts.append(str(block.get("text", "")))
         return "\n\n".join(parts).strip()
@@ -109,4 +123,3 @@ class UnifiedOutputFormatter:
                 processing_time_ms=processing_time_ms,
             )
         )
-        await db.commit()

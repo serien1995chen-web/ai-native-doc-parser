@@ -105,4 +105,5 @@ async def download_result(
     return Response(
         content=content,
         media_type=_CONTENT_TYPES[format],
+        headers={"Content-Disposition": f'attachment; filename="result.{format}"'},
     )

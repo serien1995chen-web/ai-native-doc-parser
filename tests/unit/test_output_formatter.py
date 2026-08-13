@@ -65,6 +65,30 @@ def test_to_json_returns_json_data() -> None:
     assert UnifiedOutputFormatter.to_json(result)["blocks"][0]["text"] == "hi"
 
 
+def test_table_pads_short_rows() -> None:
+    blocks = [{"type": "table", "rows": [["a", "b"], ["1"]]}]
+    markdown = UnifiedOutputFormatter.to_markdown(_parse_result(blocks))
+    assert "| 1 |  |" in markdown
+
+
+def test_table_with_empty_header_is_skipped() -> None:
+    blocks = [{"type": "table", "rows": [[]]}]
+    assert UnifiedOutputFormatter.to_markdown(_parse_result(blocks)) == ""
+
+
+def test_code_block_with_backticks_uses_longer_fence() -> None:
+    blocks = [{"type": "code", "language": "text", "text": "a ``` b"}]
+    markdown = UnifiedOutputFormatter.to_markdown(_parse_result(blocks))
+    assert "````text" in markdown
+    assert "a ``` b" in markdown
+
+
+def test_formula_with_dollar_signs_escaped() -> None:
+    blocks = [{"type": "formula", "text": "a $$ b"}]
+    markdown = UnifiedOutputFormatter.to_markdown(_parse_result(blocks))
+    assert "$$a \\$\\$ b$$" in markdown
+
+
 @pytest.mark.asyncio
 async def test_persist_writes_markdown_and_json() -> None:
     db = FakeDB()
@@ -79,4 +103,4 @@ async def test_persist_writes_markdown_and_json() -> None:
     assert all(row.task_id == task_id for row in db.added)
     assert all(row.file_id == file_id for row in db.added)
     assert all(row.output_size and row.output_size > 0 for row in db.added)
-    assert db.commits == 1
+    assert db.commits == 0

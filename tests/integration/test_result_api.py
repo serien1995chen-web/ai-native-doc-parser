@@ -147,6 +147,10 @@ async def test_download_markdown() -> None:
     assert response.status_code == 200
     assert response.text == "hello"
     assert response.headers["content-type"].startswith("text/markdown")
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="result.markdown"'
+    )
 
 
 @pytest.mark.asyncio
@@ -164,3 +168,7 @@ async def test_download_html_uses_converter() -> None:
     assert response.status_code == 200
     assert response.text == "<converted html>"
     assert response.headers["content-type"].startswith("text/html")
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="result.html"'
+    )
