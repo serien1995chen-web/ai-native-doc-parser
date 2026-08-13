@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import type { Collection, CollectionItem } from '../types'
+import { mockAddCollectionItem } from '../api/client'
+import type { Collection, CollectionItem, ContentType } from '../types'
 
 export const useCollectionStore = defineStore('collections', {
   state: () => ({
@@ -42,6 +43,22 @@ export const useCollectionStore = defineStore('collections', {
       } finally {
         this.loading = false
       }
+    },
+    async addItem(
+      collectionId: string,
+      payload: {
+        taskId: string
+        fileId: string
+        contentType: ContentType
+        originalName: string | null
+      },
+    ) {
+      const response = await mockAddCollectionItem(collectionId, payload.taskId)
+      const item = response.data
+      if (!item) return null
+      const current = this.itemsByCollection[collectionId] ?? []
+      this.itemsByCollection[collectionId] = [...current, item]
+      return item
     },
   },
 })
