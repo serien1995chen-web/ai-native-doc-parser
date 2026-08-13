@@ -88,6 +88,12 @@ class ImagePipeline:
     def __init__(self, client: GPUInferenceClient | None = None) -> None:
         self.client = client or GPUInferenceClient()
 
+    async def aclose(self) -> None:
+        """Close the underlying GPU client when this pipeline owns it."""
+        close = getattr(self.client, "aclose", None)
+        if close is not None:
+            await close()
+
     async def run(
         self,
         image_bytes: bytes,
@@ -215,8 +221,13 @@ class ImagePipeline:
 class ImagePipelineParser(BaseParser):
     """Parser that converts images into unified blocks through GPU services."""
 
-    def __init__(self, pipeline: ImagePipeline | None = None) -> None:
-        self._pipeline = pipeline or ImagePipeline()
+    def __init__(
+        self,
+        pipeline: ImagePipeline | None = None,
+        pipeline_factory: Callable[[], ImagePipeline] | None = None,
+    ) -> None:
+        self._pipeline = pipeline
+        self._pipeline_factory = pipeline_factory or ImagePipeline
 
     def info(self) -> ParserInfo:
         return ParserInfo(
@@ -250,7 +261,16 @@ class ImagePipelineParser(BaseParser):
             raise FileNotFoundError(file_path)
         image_bytes = path.read_bytes()
         image_type = (options or {}).get("image_type", "image")
-        blocks = _run_async(lambda: self._pipeline.run(image_bytes, image_type=image_type))
+        pipeline = self._pipeline or self._pipeline_factory()
+
+        async def execute() -> list[dict[str, Any]]:
+            try:
+                return await pipeline.run(image_bytes, image_type=image_type)
+            finally:
+                if self._pipeline is None:
+                    await pipeline.aclose()
+
+        blocks = _run_async(lambda: execute())
         processing_time_ms = round((perf_counter() - started) * 1000, 3)
         json_data = {
             "schema_version": SCHEMA_VERSION,

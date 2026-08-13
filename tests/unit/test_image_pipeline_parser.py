@@ -6,6 +6,7 @@ import base64
 import importlib
 import importlib.util
 import inspect
+import httpx
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -16,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app.parsers.implementations.image_pipeline.gpu_client import GPUInferenceClient
 from app.parsers.implementations.image_pipeline.pipeline import (
     ImagePipeline,
     ImagePipelineParser,
@@ -298,3 +300,38 @@ async def test_image_pipeline_parser_parse_within_running_loop(
     assert not inspect.iscoroutine(result)
     assert result.page_count == 1
     assert result.json_data["file_type"] == "image"
+
+
+def test_parser_repeated_parse_with_real_async_client(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/layout"):
+            return httpx.Response(200, json={"detections": []})
+        if url.endswith("/ocr"):
+            return httpx.Response(
+                200,
+                json={
+                    "items": [
+                        {"text": "x", "bbox": [1, 2, 3, 4], "confidence": 0.9}
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    def make_pipeline() -> ImagePipeline:
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        gpu_client = GPUInferenceClient(
+            pytorch_url="http://pytorch.test",
+            paddle_url="http://paddle.test",
+            client=client,
+        )
+        return ImagePipeline(client=gpu_client)
+
+    parser = ImagePipelineParser(pipeline_factory=make_pipeline)
+    image_path = tmp_path / "repeat.png"
+    image_path.write_bytes(_make_png())
+    first = parser.parse(str(image_path))
+    second = parser.parse(str(image_path))
+    assert first.json_data["blocks"][0]["text"] == "x"
+    assert second.json_data["blocks"][0]["text"] == "x"
