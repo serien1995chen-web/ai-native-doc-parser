@@ -180,8 +180,7 @@ async def test_image_pipeline_formula_and_table_types() -> None:
     ]
 
 
-@pytest.mark.asyncio
-async def test_image_pipeline_parser_output_schema(tmp_path: Path) -> None:
+def test_image_pipeline_parser_output_schema(tmp_path: Path) -> None:
     client = _fake_client(
         ocr={
             "gpu_unavailable": False,
@@ -193,7 +192,7 @@ async def test_image_pipeline_parser_output_schema(tmp_path: Path) -> None:
     parser = ImagePipelineParser(pipeline=pipeline)
     image_path = tmp_path / "sample.png"
     image_path.write_bytes(_make_png())
-    result = await parser.parse(str(image_path))
+    result = parser.parse(str(image_path))
     assert result.markdown == ""
     assert result.page_count == 1
     assert result.processing_time_ms is not None
@@ -260,3 +259,72 @@ def test_gpu_server_table_and_formula_dispatch(
         json={"model_type": "formula", "image_base64": image_b64},
     )
     assert unavailable_response.status_code == 503
+
+
+def test_gpu_pipeline_module_imports() -> None:
+    module = _load_server_module(
+        REPO_ROOT / "gpu-pytorch" / "pipeline.py",
+        "gpu_pipeline_b6",
+    )
+    assert hasattr(module, "ImagePipeline")
+
+
+def test_gpu_pipeline_ocr_uses_crop() -> None:
+    module = _load_server_module(
+        REPO_ROOT / "gpu-pytorch" / "pipeline.py",
+        "gpu_pipeline_b6_crop",
+    )
+
+    class FakeLayout:
+        def detect(self, image_path: Path) -> list[dict]:
+            return [
+                {"class": "text", "bbox": [0, 0, 50, 50], "confidence": 0.9}
+            ]
+
+    class FakeOCR:
+        def __init__(self) -> None:
+            self.paths: list[str] = []
+
+        def recognize(self, image_path: Path) -> list[dict]:
+            self.paths.append(str(image_path))
+            return [
+                {"text": "cropped", "bbox": [0, 0, 10, 10], "confidence": 0.9}
+            ]
+
+    class FakeTable:
+        def predict(self, image_path: Path) -> dict:
+            return {"rows": [], "bbox": []}
+
+    class FakeFormula:
+        def recognize(self, image_path: Path) -> dict:
+            return {"latex": ""}
+
+    ocr = FakeOCR()
+    pipeline = module.ImagePipeline(
+        layout_engine=FakeLayout(),
+        ocr_engine=ocr,
+        table_engine=FakeTable(),
+        formula_engine=FakeFormula(),
+    )
+    blocks = pipeline.run(_make_png())
+    assert blocks[0]["type"] == "paragraph"
+    assert blocks[0]["text"] == "cropped"
+    assert Path(ocr.paths[0]).name.startswith("image-crop-")
+
+
+def test_formula_engine_ready_returns_latex(tmp_path: Path) -> None:
+    formula_module = _load_server_module(
+        REPO_ROOT / "gpu-pytorch" / "engines" / "formula.py",
+        "gpu_formula_b6",
+    )
+
+    class FakeUniMERNet:
+        def predict(self, image_path: Path) -> str:
+            return "x^2"
+
+    engine = formula_module.FormulaEngine()
+    engine._model_ready = lambda: True
+    engine._get_engine = lambda: FakeUniMERNet()
+    image_path = tmp_path / "formula.png"
+    image_path.write_bytes(b"png")
+    assert engine.recognize(image_path) == {"latex": "x^2"}

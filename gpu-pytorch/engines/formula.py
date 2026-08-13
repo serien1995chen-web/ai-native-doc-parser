@@ -42,15 +42,31 @@ class FormulaEngine:
             return False
         return any((model_dir / name).is_file() for name in TOKENIZER_FILES)
 
+    @staticmethod
+    def _normalize_latex(result: Any) -> str:
+        if isinstance(result, dict):
+            for key in ("latex", "pred", "prediction", "text"):
+                if result.get(key):
+                    return str(result[key])
+            return str(result)
+        if isinstance(result, (list, tuple)):
+            return str(result[0]) if result else ""
+        return str(result or "")
+
     def _get_engine(self) -> Any:
         if self._engine is None:
             try:
-                import unimernet  # noqa: F401
+                from unimernet.infer import UniMERNet
             except Exception as exc:
                 raise GPUUnavailableError(
                     f"Failed to import unimernet: {exc}"
                 ) from exc
-            self._engine = True
+            try:
+                self._engine = UniMERNet()
+            except Exception as exc:
+                raise GPUUnavailableError(
+                    f"Failed to initialize UniMERNet: {exc}"
+                ) from exc
         return self._engine
 
     def recognize(self, image_path: str | Path) -> FormulaResult:
@@ -62,7 +78,11 @@ class FormulaEngine:
                 "UniMERNet model files not found under "
                 f"{self.model_base / 'unimernet'}"
             )
-        self._get_engine()
-        raise GPUUnavailableError(
-            "UniMERNet inference is not implemented in this build"
-        )
+        engine = self._get_engine()
+        try:
+            result = engine.predict(str(path))
+        except Exception as exc:
+            raise GPUUnavailableError(
+                f"Formula inference failed: {exc}"
+            ) from exc
+        return {"latex": self._normalize_latex(result)}

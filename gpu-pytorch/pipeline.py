@@ -16,6 +16,26 @@ from engines.ocr import OCREngine
 from engines.reading_order import Region, sort_regions
 from engines.table import TableEngine
 
+def _crop_image_path(image_path: Path, bbox: list[float], suffix: str) -> Path:
+    from PIL import Image
+
+    image = Image.open(image_path).convert("RGB")
+    x0, y0, x1, y1 = [float(value) for value in bbox]
+    left = max(0, int(x0))
+    top = max(0, int(y0))
+    right = min(image.width, int(x1))
+    bottom = min(image.height, int(y1))
+    crop_path = Path("/tmp") / f"image-crop-{uuid.uuid4().hex}-{suffix}.png"
+    if right <= left or bottom <= top:
+        image.close()
+        crop_path.write_bytes(image_path.read_bytes())
+    else:
+        cropped = image.crop((left, top, right, bottom))
+        cropped.save(crop_path, format="PNG")
+        cropped.close()
+        image.close()
+    return crop_path
+
 
 class ImagePipeline:
     """Orchestrate layout, OCR, table, and formula engines on the GPU host."""
@@ -62,7 +82,11 @@ class ImagePipeline:
                 class_name = region["class"].lower()
                 bbox = region["bbox"]
                 if class_name == "title":
-                    items = self.ocr_engine.recognize(image_path)
+                    crop_path = _crop_image_path(image_path, bbox, "title")
+                    try:
+                        items = self.ocr_engine.recognize(crop_path)
+                    finally:
+                        crop_path.unlink(missing_ok=True)
                     text = " ".join(item["text"] for item in items)
                     blocks.append(
                         {
@@ -74,7 +98,11 @@ class ImagePipeline:
                         }
                     )
                 elif class_name == "text":
-                    items = self.ocr_engine.recognize(image_path)
+                    crop_path = _crop_image_path(image_path, bbox, "text")
+                    try:
+                        items = self.ocr_engine.recognize(crop_path)
+                    finally:
+                        crop_path.unlink(missing_ok=True)
                     text = " ".join(item["text"] for item in items)
                     blocks.append(
                         {
@@ -85,7 +113,11 @@ class ImagePipeline:
                         }
                     )
                 elif class_name == "table":
-                    table = self.table_engine.predict(image_path)
+                    crop_path = _crop_image_path(image_path, bbox, "table")
+                    try:
+                        table = self.table_engine.predict(crop_path)
+                    finally:
+                        crop_path.unlink(missing_ok=True)
                     blocks.append(
                         {
                             "type": "table",
@@ -95,7 +127,11 @@ class ImagePipeline:
                         }
                     )
                 elif class_name == "formula":
-                    formula = self.formula_engine.recognize(image_path)
+                    crop_path = _crop_image_path(image_path, bbox, "formula")
+                    try:
+                        formula = self.formula_engine.recognize(crop_path)
+                    finally:
+                        crop_path.unlink(missing_ok=True)
                     blocks.append(
                         {
                             "type": "formula",

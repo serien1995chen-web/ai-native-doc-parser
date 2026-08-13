@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
@@ -230,7 +231,7 @@ class ImagePipelineParser(BaseParser):
             version="1.0.0",
         )
 
-    async def parse(
+    def parse(
         self,
         file_path: str,
         options: dict[str, Any] | None = None,
@@ -241,7 +242,7 @@ class ImagePipelineParser(BaseParser):
             raise FileNotFoundError(file_path)
         image_bytes = path.read_bytes()
         image_type = (options or {}).get("image_type", "image")
-        blocks = await self._pipeline.run(image_bytes, image_type=image_type)
+        blocks = asyncio.run(self._pipeline.run(image_bytes, image_type=image_type))
         processing_time_ms = round((perf_counter() - started) * 1000, 3)
         json_data = {
             "schema_version": SCHEMA_VERSION,
