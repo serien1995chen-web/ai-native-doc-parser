@@ -11,12 +11,16 @@ const router = useRouter()
 const uploading = ref(false)
 const recentFiles = ref<FileItem[]>([])
 const recentLoading = ref(false)
+const recentError = ref<string | null>(null)
 
 async function loadRecentFiles() {
   recentLoading.value = true
+  recentError.value = null
   try {
     const response = await mockRecentFiles()
     recentFiles.value = response.data?.items ?? []
+  } catch (err) {
+    recentError.value = err instanceof Error ? err.message : '加载最近解析失败'
   } finally {
     recentLoading.value = false
   }
@@ -51,6 +55,7 @@ onMounted(loadRecentFiles)
     <section class="recent-section">
       <h2>最近解析</h2>
       <p v-if="recentLoading" class="muted">加载中...</p>
+      <p v-else-if="recentError" class="error">{{ recentError }}</p>
       <ul v-else class="recent-list">
         <li
           v-for="file in recentFiles"
@@ -96,6 +101,10 @@ onMounted(loadRecentFiles)
 
 .muted {
   color: var(--color-text-secondary);
+}
+
+.error {
+  color: #b91c1c;
 }
 
 .recent-list {

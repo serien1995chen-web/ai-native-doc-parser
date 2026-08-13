@@ -22,6 +22,17 @@ const favorited = ref(false)
 const downloadFormats: Array<'markdown' | 'json' | 'html' | 'latex' | 'docx'> =
   ['markdown', 'json', 'html', 'latex', 'docx']
 
+const mimeByFormat: Record<
+  'markdown' | 'json' | 'html' | 'latex' | 'docx',
+  string
+> = {
+  markdown: 'text/markdown;charset=utf-8',
+  json: 'application/json;charset=utf-8',
+  html: 'text/html;charset=utf-8',
+  latex: 'application/x-latex;charset=utf-8',
+  docx: 'application/octet-stream',
+}
+
 const taskId = computed(() => String(route.params.task_id ?? ''))
 const currentText = computed(() => {
   if (!result.value) return ''
@@ -80,10 +91,12 @@ function download(format: 'markdown' | 'json' | 'html' | 'latex' | 'docx') {
     content = result.value.output_text ?? ''
   } else if (format === 'json') {
     content = JSON.stringify(result.value, null, 2)
+  } else if (format === 'docx') {
+    content = `Mock DOCX placeholder - ${result.value.original_name}\nTODO(B-10): use real download API`
   } else {
     content = `# ${result.value.original_name}\n\nMock ${format} export`
   }
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const blob = new Blob([content], { type: mimeByFormat[format] })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url

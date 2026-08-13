@@ -11,6 +11,7 @@ const submitting = ref(false)
 const error = ref<string | null>(null)
 
 function handlePaste(event: ClipboardEvent) {
+  if (submitting.value) return
   const items = event.clipboardData?.items ?? []
   const imageItem = Array.from(items).find((item) =>
     item.type.startsWith('image/'),
@@ -50,7 +51,12 @@ onBeforeUnmount(() => {
 <template>
   <div class="upload-card">
     <h2>截图粘贴</h2>
-    <div class="paste-zone" tabindex="0">
+    <div
+      class="paste-zone"
+      :class="{ 'paste-zone-disabled': submitting }"
+      tabindex="0"
+      :aria-disabled="submitting"
+    >
       <p>{{ submitting ? '上传中...' : '复制图片后按 Ctrl+V 粘贴' }}</p>
       <img v-if="preview" :src="preview" alt="截图预览" />
     </div>
@@ -82,6 +88,11 @@ onBeforeUnmount(() => {
   border-radius: var(--radius);
   color: var(--color-text-secondary);
   text-align: center;
+}
+
+.paste-zone-disabled {
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 .paste-zone img {
