@@ -21,6 +21,9 @@ L1_EXTENSIONS = {
     ".docx": "docx",
     ".pptx": "pptx",
     ".xlsx": "xlsx",
+    ".doc": "doc",
+    ".ppt": "ppt",
+    ".xls": "xls",
     ".html": "html",
     ".htm": "html",
     ".txt": "txt",
@@ -49,6 +52,7 @@ L2_CONFIDENCE = 0.92
 L3_STRONG_CONFIDENCE = 0.85
 L3_WEAK_CONFIDENCE = 0.75
 L4_ACCEPTANCE_THRESHOLD = 0.5
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 _CODE_STRONG = re.compile(r"^\s*(def|class|import|from)\s", re.MULTILINE)
 _CODE_WEAK = re.compile(r"\b(return|function|const|let|var|#include)\b")
@@ -82,9 +86,12 @@ class Layer4Classifier(Protocol):
         """Return a candidate type and confidence."""
 
 
-def _content_type_for(identified_type: str) -> str | None:
+def _content_type_for(
+    identified_type: str,
+    uploaded_type: str | None = None,
+) -> str | None:
     if identified_type in {"txt", "md", "text"}:
-        return "text_block"
+        return "file" if uploaded_type == "file" else "text_block"
     if identified_type == "code":
         return "code"
     if identified_type in {"image", "png", "jpg", "jpeg", "bmp", "gif", "webp"}:
@@ -162,39 +169,96 @@ class FileTypeIDService:
             "avg_line_length": len(sample) / line_count,
         }
 
-    def _layer1(self, file_path: Path) -> FinalIdentification:
+    def _layer1(
+        self,
+        file_path: Path,
+        uploaded_type: str | None = None,
+    ) -> FinalIdentification:
         suffix = file_path.suffix.lower()
         detected = L1_EXTENSIONS.get(suffix, "unknown")
         confidence = L1_CONFIDENCE if detected != "unknown" else 0.0
         return FinalIdentification(
             identified_type=detected,
-            content_type=_content_type_for(detected),
+            content_type=_content_type_for(detected, uploaded_type),
             confidence=confidence,
             final_layer=1,
             is_final=False,
             details={"suffix": suffix},
         )
 
-    def _layer2(self, file_path: Path) -> FinalIdentification:
+    def _layer2(
+        self,
+        file_path: Path,
+        uploaded_type: str | None = None,
+    ) -> FinalIdentification:
         head, tail = _read_head_tail(file_path)
         if head.startswith(b"%PDF-"):
-            return self._magic_result("pdf", "file", 2, head)
+            return self._magic_result(
+                "pdf",
+                _content_type_for("pdf", uploaded_type),
+                2,
+                head,
+            )
         if head.startswith(b"\x89PNG\r\n\x1a\n"):
-            return self._magic_result("image", "image", 2, head)
+            return self._magic_result(
+                "image",
+                _content_type_for("image", uploaded_type),
+                2,
+                head,
+            )
         if head.startswith(b"\xff\xd8\xff"):
-            return self._magic_result("image", "image", 2, head)
+            return self._magic_result(
+                "image",
+                _content_type_for("image", uploaded_type),
+                2,
+                head,
+            )
         if head.startswith(b"BM"):
-            return self._magic_result("image", "image", 2, head)
+            return self._magic_result(
+                "image",
+                _content_type_for("image", uploaded_type),
+                2,
+                head,
+            )
         if head.startswith((b"GIF87a", b"GIF89a")):
-            return self._magic_result("image", "image", 2, head)
+            return self._magic_result(
+                "image",
+                _content_type_for("image", uploaded_type),
+                2,
+                head,
+            )
         if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
-            return self._magic_result("image", "image", 2, head)
+            return self._magic_result(
+                "image",
+                _content_type_for("image", uploaded_type),
+                2,
+                head,
+            )
+        if head.startswith(OLE_MAGIC):
+            ole_type = self._ole_container_type(head)
+            if ole_type:
+                return FinalIdentification(
+                    identified_type=ole_type,
+                    content_type=_content_type_for(ole_type, uploaded_type),
+                    confidence=L2_CONFIDENCE,
+                    final_layer=2,
+                    is_final=False,
+                    details={"ole": ole_type},
+                )
+            return FinalIdentification(
+                identified_type="unknown",
+                content_type=None,
+                confidence=0.0,
+                final_layer=2,
+                is_final=False,
+                details={"ole": "unknown"},
+            )
         if head.startswith(b"PK\x03\x04"):
             container_type = self._zip_container_type(file_path)
             if container_type:
                 return FinalIdentification(
                     identified_type=container_type,
-                    content_type="file",
+                    content_type=_content_type_for(container_type, uploaded_type),
                     confidence=L2_CONFIDENCE,
                     final_layer=2,
                     is_final=False,
@@ -216,6 +280,19 @@ class FileTypeIDService:
             is_final=False,
             details={"head": head[:8].hex(), "tail": tail[:8].hex()},
         )
+
+    @staticmethod
+    def _ole_container_type(head: bytes) -> str | None:
+        if "WordDocument".encode("utf-16-le") in head:
+            return "doc"
+        if "PowerPoint Document".encode("utf-16-le") in head:
+            return "ppt"
+        if (
+            "Workbook".encode("utf-16-le") in head
+            or "Book".encode("utf-16-le") in head
+        ):
+            return "xls"
+        return None
 
     @staticmethod
     def _magic_result(
@@ -250,7 +327,11 @@ class FileTypeIDService:
             return None
         return None
 
-    def _layer3(self, file_path: Path) -> FinalIdentification:
+    def _layer3(
+        self,
+        file_path: Path,
+        uploaded_type: str | None = None,
+    ) -> FinalIdentification:
         sample = _read_text_sample(file_path)
         printable = sum(
             1 for char in sample if char.isprintable() or char in "\n\r\t"
@@ -258,43 +339,47 @@ class FileTypeIDService:
         if sample and printable / len(sample) < 0.7:
             return FinalIdentification(
                 identified_type="txt",
-                content_type="text_block",
+                content_type=_content_type_for("txt", uploaded_type),
                 confidence=0.4,
                 final_layer=3,
                 is_final=False,
                 details={"text_features": "binary"},
             )
         if _CODE_STRONG.search(sample):
-            return self._text_result("code", "code", L3_STRONG_CONFIDENCE, 3)
+            return self._text_result("code", uploaded_type, L3_STRONG_CONFIDENCE, 3)
         if _HTML_STRONG.search(sample):
-            return self._text_result("html", "file", L3_STRONG_CONFIDENCE, 3)
+            return self._text_result("html", uploaded_type, L3_STRONG_CONFIDENCE, 3)
         if _MD_STRONG.search(sample):
-            return self._text_result("md", "text_block", L3_STRONG_CONFIDENCE, 3)
+            return self._text_result("md", uploaded_type, L3_STRONG_CONFIDENCE, 3)
         if _CODE_WEAK.search(sample):
-            return self._text_result("code", "code", L3_WEAK_CONFIDENCE, 3)
+            return self._text_result("code", uploaded_type, L3_WEAK_CONFIDENCE, 3)
         if _HTML_WEAK.search(sample):
-            return self._text_result("html", "file", L3_WEAK_CONFIDENCE, 3)
+            return self._text_result("html", uploaded_type, L3_WEAK_CONFIDENCE, 3)
         if _MD_WEAK.search(sample):
-            return self._text_result("md", "text_block", L3_WEAK_CONFIDENCE, 3)
-        return self._text_result("txt", "text_block", L3_STRONG_CONFIDENCE, 3)
+            return self._text_result("md", uploaded_type, L3_WEAK_CONFIDENCE, 3)
+        return self._text_result("txt", uploaded_type, L3_STRONG_CONFIDENCE, 3)
 
     @staticmethod
     def _text_result(
         identified_type: str,
-        content_type: str,
+        uploaded_type: str | None,
         confidence: float,
         layer: int,
     ) -> FinalIdentification:
         return FinalIdentification(
             identified_type=identified_type,
-            content_type=content_type,
+            content_type=_content_type_for(identified_type, uploaded_type),
             confidence=confidence,
             final_layer=layer,
             is_final=False,
             details={"text_features": identified_type},
         )
 
-    def _layer4(self, file_path: Path) -> FinalIdentification:
+    def _layer4(
+        self,
+        file_path: Path,
+        uploaded_type: str | None = None,
+    ) -> FinalIdentification:
         file_size = file_path.stat().st_size if file_path.exists() else 0
         with file_path.open("rb") as handle:
             sample = handle.read(64 * 1024)
@@ -306,7 +391,7 @@ class FileTypeIDService:
         )
         return FinalIdentification(
             identified_type=detected_type,
-            content_type=_content_type_for(detected_type),
+            content_type=_content_type_for(detected_type, uploaded_type),
             confidence=confidence,
             final_layer=4,
             is_final=False,
@@ -360,11 +445,12 @@ class FileTypeIDService:
         db: Any,
         file_id: uuid.UUID,
         file_path: Path,
+        uploaded_type: str | None = None,
     ) -> IdentificationResult:
         """Run layers in order and persist every layer result."""
         path = Path(file_path)
 
-        layer1 = self._layer1(path)
+        layer1 = self._layer1(path, uploaded_type)
         layer1_final = layer1.confidence is not None and (
             layer1.confidence >= settings.L1_CONFIDENCE_THRESHOLD
         )
@@ -383,7 +469,7 @@ class FileTypeIDService:
                 ),
             )
 
-        layer2 = self._layer2(path)
+        layer2 = self._layer2(path, uploaded_type)
         layer2_final = layer2.confidence is not None and (
             layer2.confidence >= settings.L2_CONFIDENCE_THRESHOLD
         )
@@ -402,7 +488,7 @@ class FileTypeIDService:
                 ),
             )
 
-        layer3 = self._layer3(path)
+        layer3 = self._layer3(path, uploaded_type)
         layer3_final = layer3.confidence is not None and (
             layer3.confidence >= settings.L3_CONFIDENCE_THRESHOLD
         )
@@ -421,7 +507,7 @@ class FileTypeIDService:
                 ),
             )
 
-        layer4 = self._layer4(path)
+        layer4 = self._layer4(path, uploaded_type)
         if layer4.confidence is not None and layer4.confidence >= L4_ACCEPTANCE_THRESHOLD:
             final = FinalIdentification(
                 layer4.identified_type,

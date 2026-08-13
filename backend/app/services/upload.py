@@ -72,6 +72,7 @@ class UploadService:
                 db,
                 record.id,
                 absolute_path,
+                record.uploaded_type,
             )
             if result.identified_type == "UNKNOWN":
                 record.status = FileStatus.FAILED.value

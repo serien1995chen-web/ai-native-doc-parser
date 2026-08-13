@@ -81,8 +81,14 @@ class FakeIdentifier:
         self.confidence = confidence
         self.final_layer = final_layer
 
-    async def identify(self, db: Any, file_id: uuid.UUID, path: Path) -> IdentificationResult:
-        self.calls.append((file_id, Path(path)))
+    async def identify(
+        self,
+        db: Any,
+        file_id: uuid.UUID,
+        path: Path,
+        uploaded_type: str | None = None,
+    ) -> IdentificationResult:
+        self.calls.append((file_id, Path(path), uploaded_type))
         return IdentificationResult(
             file_id=file_id,
             identified_type=self.identified_type,
@@ -413,10 +419,23 @@ async def test_upload_calls_identification_service() -> None:
     await service.upload_file(db, uuid.uuid4(), "a.txt", "text/plain", b"hello")
 
     assert len(identifier.calls) == 1
-    file_id, path = identifier.calls[0]
+    file_id, path, uploaded_type = identifier.calls[0]
     assert isinstance(file_id, uuid.UUID)
     assert isinstance(path, Path)
+    assert uploaded_type == "file"
     assert db.add.call_args.args[0].status == "parsing"
+
+
+@pytest.mark.asyncio
+async def test_upload_text_passes_uploaded_type_to_identifier() -> None:
+    db = _make_db()
+    db.execute.return_value = FakeResult([])
+    identifier = FakeIdentifier()
+    service, _ = _service(db, identifier=identifier)
+
+    await service.upload_text(db, uuid.uuid4(), "hello", "text")
+
+    assert identifier.calls[0][2] == "text"
 
 
 @pytest.mark.asyncio
