@@ -20,6 +20,7 @@ from app.models import File
 from app.schemas.common import ErrorCode, FileStatus, PaginatedResponse
 from app.schemas.file import FileListParams, FileResponse, FileUploadResponse
 from app.services.file_type_id import FileTypeIDService
+from app.services.parser_router import ParserRouter
 from app.services.storage import StorageService
 
 
@@ -59,9 +60,11 @@ class UploadService:
         self,
         storage: StorageService,
         file_type_id_service: FileTypeIDService | None = None,
+        parser_router: ParserRouter | None = None,
     ) -> None:
         self.storage = storage
         self.file_type_id_service = file_type_id_service or FileTypeIDService()
+        self.parser_router = parser_router or ParserRouter(storage=self.storage)
 
     async def _run_identification(self, db: Any, record: File) -> None:
         absolute_path = self.storage.resolve_path(record.stored_path)
@@ -77,9 +80,25 @@ class UploadService:
             if result.identified_type == "UNKNOWN":
                 record.status = FileStatus.FAILED.value
                 record.error_message = "File type could not be identified"
+                await db.commit()
             else:
                 record.status = FileStatus.PARSING.value
-            await db.commit()
+                await db.commit()
+                try:
+                    await self.parser_router.route(
+                        db,
+                        record.id,
+                        result.identified_type,
+                        record.user_id,
+                    )
+                except AppException as exc:
+                    record.status = FileStatus.FAILED.value
+                    record.error_message = exc.message
+                    await db.commit()
+                except Exception:
+                    record.status = FileStatus.FAILED.value
+                    record.error_message = "File parsing dispatch failed"
+                    await db.commit()
         except Exception:
             record.status = FileStatus.FAILED.value
             record.error_message = "File type identification failed"

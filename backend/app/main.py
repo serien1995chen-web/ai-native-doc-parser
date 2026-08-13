@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Manage application startup and shutdown lifecycle."""
     setup_logging()
+    from app import parsers  # noqa: F401
     try:
         await init_db()
         logger.info("Database connection verified")

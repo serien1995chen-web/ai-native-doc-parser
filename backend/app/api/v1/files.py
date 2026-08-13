@@ -19,6 +19,7 @@ from app.schemas.file import (
 )
 from app.services.storage import LocalStorageService, StorageService
 from app.services.file_type_id import FileTypeIDService
+from app.services.parser_router import ParserRouter
 from app.services.upload import UploadService
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -49,12 +50,24 @@ def get_file_type_id_service() -> FileTypeIDService:
     return FileTypeIDService()
 
 
+def get_parser_router(
+    storage: StorageService = Depends(get_storage_service),
+) -> ParserRouter:
+    """Provide a parser router bound to the request storage."""
+    return ParserRouter(storage=storage)
+
+
 def get_upload_service(
     storage: StorageService = Depends(get_storage_service),
     file_type_id_service: FileTypeIDService = Depends(get_file_type_id_service),
+    parser_router: ParserRouter = Depends(get_parser_router),
 ) -> UploadService:
     """Provide an UploadService bound to the request storage."""
-    return UploadService(storage, file_type_id_service=file_type_id_service)
+    return UploadService(
+        storage,
+        file_type_id_service=file_type_id_service,
+        parser_router=parser_router,
+    )
 
 
 @router.post("/upload", response_model=APIResponse[FileUploadResponse])
